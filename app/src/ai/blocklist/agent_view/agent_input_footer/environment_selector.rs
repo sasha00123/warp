@@ -260,6 +260,7 @@ impl EnvironmentSelector {
                     me.set_menu_visibility(false, ctx);
                 }
             }
+            PromptDisplayMenuEvent::SecondaryMenuAction(_) => {}
             PromptDisplayMenuEvent::CloseMenu => {
                 me.set_menu_visibility(false, ctx);
             }

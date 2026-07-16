@@ -10,4 +10,4 @@ trap "_on_error \"\${LINENO}\" \"\$BASH_COMMAND\"" ERR
 sudo pacman -Syu --noconfirm
 sudo pacman -S --noconfirm tmux'
 
-bash <<< "$INSTALL_TMUX" && _check_tmux && command tmux -Lwarp -CC && exit
+bash <<< "$INSTALL_TMUX" && _check_tmux && command tmux -Lwarp -CC new-session -A -s "$(_warp_tmux_session_name)" && exit

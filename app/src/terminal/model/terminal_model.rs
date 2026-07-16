@@ -2552,6 +2552,14 @@ impl TerminalModel {
         self.tmux_control_mode_context.is_some()
     }
 
+    pub fn run_tmux_command(&mut self, command: TmuxCommand) -> bool {
+        if !self.tmux_control_mode_active() {
+            return false;
+        }
+        self.emit_handler_event(HandlerEvent::RunTmuxCommand(command));
+        true
+    }
+
     pub fn is_pending_warp_initiated_control_mode(&self) -> bool {
         self.pending_warp_initiated_control_mode.is_some()
     }
@@ -3495,16 +3503,25 @@ impl ansi::Handler for TerminalModel {
                 let num_cols = size.columns();
 
                 if self.tmux_control_mode_context != Some(TmuxControlModeContext::UserInitiated) {
-                    // We don't want to intentionally disable persistence when the user runs tmux control
-                    // mode on their own.
+                    // Persistent SSH tmux mode should survive network drops. If a previous Warp
+                    // build set destroy-unattached on for this tmux server, explicitly turn it off
+                    // before attaching so the remote session remains available for reconnect.
                     self.emit_handler_event(HandlerEvent::RunTmuxCommand(
-                        TmuxCommand::SetDestroyUnattached,
+                        TmuxCommand::SetDestroyUnattachedOff,
                     ));
 
                     self.emit_handler_event(HandlerEvent::RunTmuxCommand(
                         TmuxCommand::SetWindowSizeToSmallest,
                     ));
                 }
+
+                self.emit_handler_event(HandlerEvent::RunTmuxCommand(
+                    TmuxCommand::SetPersistentWorkspaceOptions,
+                ));
+
+                self.emit_handler_event(HandlerEvent::RunTmuxCommand(
+                    TmuxCommand::ListWorkspaces,
+                ));
 
                 self.emit_handler_event(HandlerEvent::RunTmuxCommand(
                     TmuxCommand::UpdateClientSize { num_cols, num_rows },
@@ -3521,6 +3538,10 @@ impl ansi::Handler for TerminalModel {
                 });
                 self.event_proxy
                     .send_terminal_event(Event::TmuxControlModeReady { primary_pane });
+            }
+            tmux::ControlModeEvent::WorkspaceSnapshot(workspaces) => {
+                self.event_proxy
+                    .send_terminal_event(Event::TmuxWorkspaceSnapshot(workspaces));
             }
         }
     }

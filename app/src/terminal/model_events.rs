@@ -243,6 +243,9 @@ impl ModelEventDispatcher {
             Event::TmuxControlModeReady { primary_pane } => {
                 ModelEvent::TmuxControlModeReady { primary_pane }
             }
+            Event::TmuxWorkspaceSnapshot(workspaces) => {
+                ModelEvent::TmuxWorkspaceSnapshot(workspaces)
+            }
             Event::DetectedEndOfSshLogin(check_type) => {
                 ModelEvent::DetectedEndOfSshLogin(check_type)
             }
@@ -437,6 +440,7 @@ pub enum ModelEvent {
     TmuxControlModeReady {
         primary_pane: u32,
     },
+    TmuxWorkspaceSnapshot(Vec<crate::terminal::model::tmux::commands::TmuxWorkspace>),
     /// Sent when a line of output from an interactive ssh session indicates login is complete.
     /// A line such as "Last login: Wed Oct 30" for example indicates login is complete. This is
     /// useful for detecting when an ssh session becomes ready for warpification.

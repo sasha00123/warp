@@ -12,12 +12,35 @@ use crate::util::parse_ascii_u32;
 // This is because the response is parsed using regex, as well as to avoid
 // messing up tmux's shell-like parsing.
 const PRIMARY_WINDOW_PANE_PREFIX: &str = "primary window pane";
+const SELECTED_WINDOW_PANE_PREFIX: &str = "selected window pane";
+const WORKSPACE_PREFIX: &str = "workspace";
 pub const BACKGROUND_WINDOW_PREFIX: &str = "background window";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TmuxWorkspace {
+    pub window_id: u32,
+    pub pane_id: u32,
+    pub name: String,
+    pub command: String,
+    pub path: String,
+    pub pane_count: u32,
+    pub active: bool,
+    pub pane_dead: bool,
+    pub exit_status: Option<i32>,
+}
 
 #[derive(Clone, Debug)]
 pub enum TmuxCommand {
     /// Gets the window id and pane id of the primary window pane.
     GetPrimaryWindowPane,
+    /// Gets all user-visible windows in the attached session.
+    ListWorkspaces,
+    /// Creates and selects a new persistent page.
+    NewWorkspace,
+    /// Selects an existing page and replays as much tmux scrollback as is available.
+    SelectWorkspace { window_id: u32, pane_id: u32 },
+    /// Closes a page. The final page is replaced before it is closed so the session survives.
+    KillWorkspace { window_id: u32 },
     /// Runs a command in the background in a new temporary window.
     RunInBackgroundWindow {
         command_id: String,
@@ -29,6 +52,10 @@ pub enum TmuxCommand {
     UpdateClientSize { num_rows: usize, num_cols: usize },
     /// Configures tmux to automatically terminate any sessions that don't have clients attached.
     SetDestroyUnattached,
+    /// Configures tmux to keep sessions alive after all clients detach.
+    SetDestroyUnattachedOff,
+    /// Keeps a large remote scrollback while preserving exit-closes-page behavior.
+    SetPersistentWorkspaceOptions,
     /// Forces the tmux session to inherit the smallest dimensions of any attached client.
     SetWindowSizeToSmallest,
 }
@@ -46,6 +73,21 @@ impl TmuxCommand {
         match self {
             TmuxCommand::GetPrimaryWindowPane => format!(
                 "list-panes -F \"#{{?pane_active,{PRIMARY_WINDOW_PANE_PREFIX}: ,}}#{{window_id}} #{{pane_id}}\"\n"
+            ),
+            TmuxCommand::ListWorkspaces => format!(
+                "list-windows -F \"{WORKSPACE_PREFIX}: #{{window_id}}|#{{pane_id}}|#{{window_name}}|#{{pane_current_command}}|#{{pane_current_path}}|#{{window_panes}}|#{{window_active}}|#{{pane_dead}}|#{{pane_dead_status}}\"\n"
+            ),
+            TmuxCommand::NewWorkspace => format!(
+                "new-window -n warp\nlist-panes -F \"#{{?pane_active,{SELECTED_WINDOW_PANE_PREFIX}: ,}}#{{window_id}} #{{pane_id}}\"\ncapture-pane -e -p -S -\nrefresh-client\n{}",
+                TmuxCommand::ListWorkspaces.get_command_string()
+            ),
+            TmuxCommand::SelectWorkspace { window_id, pane_id } => format!(
+                "select-window -t @{window_id}\nselect-pane -t %{pane_id}\nlist-panes -t @{window_id} -F \"#{{?pane_active,{SELECTED_WINDOW_PANE_PREFIX}: ,}}#{{window_id}} #{{pane_id}}\"\ncapture-pane -e -p -S - -t %{pane_id}\nrefresh-client\n{}",
+                TmuxCommand::ListWorkspaces.get_command_string()
+            ),
+            TmuxCommand::KillWorkspace { window_id } => format!(
+                "if-shell -t @{window_id} -F \"#{{==:#{{session_windows}},1}}\" \"new-window -d -n warp\" \"\"\nkill-window -t @{window_id}\nlist-panes -F \"#{{?pane_active,{SELECTED_WINDOW_PANE_PREFIX}: ,}}#{{window_id}} #{{pane_id}}\"\ncapture-pane -e -p -S -\nrefresh-client\n{}",
+                TmuxCommand::ListWorkspaces.get_command_string()
             ),
             TmuxCommand::RunInBackgroundWindow {
                 current_directory_path,
@@ -109,6 +151,11 @@ impl TmuxCommand {
                 format!("refresh-client -C {num_cols},{num_rows}\n")
             }
             TmuxCommand::SetDestroyUnattached => "set destroy-unattached on\n".to_string(),
+            TmuxCommand::SetDestroyUnattachedOff => "set destroy-unattached off\n".to_string(),
+            TmuxCommand::SetPersistentWorkspaceOptions => {
+                "set-option -g history-limit 1000000\nset-window-option -g remain-on-exit off\n"
+                    .to_string()
+            }
             TmuxCommand::SetWindowSizeToSmallest => "set window-size smallest\n".to_string(),
         }
     }
@@ -116,10 +163,38 @@ impl TmuxCommand {
 
 pub enum TmuxCommandResponse {
     SetPrimaryWindowPane { window_id: u32, pane_id: u32 },
+    SelectedWindowPane { window_id: u32, pane_id: u32 },
+    Workspace(TmuxWorkspace),
     BackgroundWindow { window_id: u32, pane_id: u32 },
 }
 
 pub fn parse_command(line: Vec<u8>) -> Option<TmuxCommandResponse> {
+    if let Ok(line) = std::str::from_utf8(&line) {
+        if let Some(fields) = line.strip_prefix(&format!("{WORKSPACE_PREFIX}: ")) {
+            let mut fields = fields.splitn(9, '|');
+            let window_id = fields.next()?.strip_prefix('@')?.parse().ok()?;
+            let pane_id = fields.next()?.strip_prefix('%')?.parse().ok()?;
+            let name = fields.next()?.to_string();
+            let command = fields.next()?.to_string();
+            let path = fields.next()?.to_string();
+            let pane_count = fields.next()?.parse().ok()?;
+            let active = fields.next()? == "1";
+            let pane_dead = fields.next()? == "1";
+            let exit_status = fields.next().and_then(|status| status.parse().ok());
+            return Some(TmuxCommandResponse::Workspace(TmuxWorkspace {
+                window_id,
+                pane_id,
+                name,
+                command,
+                path,
+                pane_count,
+                active,
+                pane_dead,
+                exit_status,
+            }));
+        }
+    }
+
     lazy_static! {
         pub static ref PRIMARY_WINDOW_PANE_REGEX: Regex = {
             let pattern = format!(
@@ -135,6 +210,13 @@ pub fn parse_command(line: Vec<u8>) -> Option<TmuxCommandResponse> {
             );
             Regex::new(&pattern).expect("invalid regex")
         };
+
+        pub static ref SELECTED_WINDOW_PANE_REGEX: Regex = {
+            let pattern = format!(
+                r"^{SELECTED_WINDOW_PANE_PREFIX}: @([[:digit:]]+) %([[:digit:]]+)$"
+            );
+            Regex::new(&pattern).expect("invalid regex")
+        };
     }
 
     if let Some(captures) = BACKGROUND_WINDOW_REGEX.captures(&line) {
@@ -143,6 +225,12 @@ pub fn parse_command(line: Vec<u8>) -> Option<TmuxCommandResponse> {
         let pane_id: u32 = parse_ascii_u32(&captures[2])
             .expect("impossible: encountered non-ASCII digit in ASCII digit pattern");
         return Some(TmuxCommandResponse::BackgroundWindow { window_id, pane_id });
+    } else if let Some(captures) = SELECTED_WINDOW_PANE_REGEX.captures(&line) {
+        let window_id: u32 = parse_ascii_u32(&captures[1])
+            .expect("impossible: encountered non-ASCII digit in ASCII digit pattern");
+        let pane_id: u32 = parse_ascii_u32(&captures[2])
+            .expect("impossible: encountered non-ASCII digit in ASCII digit pattern");
+        return Some(TmuxCommandResponse::SelectedWindowPane { window_id, pane_id });
     } else if let Some(captures) = PRIMARY_WINDOW_PANE_REGEX.captures(&line) {
         let window_id: u32 = parse_ascii_u32(&captures[1])
             .expect("impossible: encountered non-ASCII digit in ASCII digit pattern");

@@ -29,14 +29,16 @@ pub fn evaluate_warpify_ssh_host(
     shell_family: ShellFamily,
     warpify_settings: &WarpifySettings,
 ) -> SshInteractiveSessionDetected {
-    let should_prompt_ssh_tmux_wrapper = *warpify_settings.enable_ssh_warpification.value()
-        && *warpify_settings.use_ssh_tmux_wrapper.value();
+    // PoC: force the tmux-based SSH wrapper so this build is easy to exercise without hidden
+    // feature flags or settings UI state getting in the way.
+    const FORCE_PERSISTENT_SSH_TMUX_POC: bool = true;
+    let should_prompt_ssh_tmux_wrapper = FORCE_PERSISTENT_SSH_TMUX_POC
+        || (*warpify_settings.enable_ssh_warpification.value()
+            && *warpify_settings.use_ssh_tmux_wrapper.value()
+            && FeatureFlag::SSHTmuxWrapper.is_enabled());
     let matches_subshell = warpify_settings.is_denylisted_subshell_command(command)
         || warpify_settings.is_compatible_subshell_command(command, shell_family);
-    if !should_prompt_ssh_tmux_wrapper
-        || matches_subshell
-        || !FeatureFlag::SSHTmuxWrapper.is_enabled()
-    {
+    if !should_prompt_ssh_tmux_wrapper || matches_subshell {
         return SshInteractiveSessionDetected::FeatureDisabled;
     }
 

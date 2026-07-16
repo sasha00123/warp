@@ -752,8 +752,12 @@ impl<S> TerminalManager<S> {
                     .contains(&ContextChipKind::NodeVersion)
         };
 
+        // PoC: force the tmux-based SSH path and disable the original ControlMaster wrapper.
+        const FORCE_PERSISTENT_SSH_TMUX_POC: bool = true;
         // The TMUX SSH wrapper supercedes the original ControlMaster wrapper.
-        let enable_ssh_wrapper = if FeatureFlag::SSHTmuxWrapper.is_enabled() {
+        let enable_ssh_wrapper = if FORCE_PERSISTENT_SSH_TMUX_POC {
+            false
+        } else if FeatureFlag::SSHTmuxWrapper.is_enabled() {
             *WarpifySettings::as_ref(ctx)
                 .enable_ssh_warpification
                 .value()

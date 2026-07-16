@@ -1031,6 +1031,10 @@ impl Session {
         )
     }
 
+    pub fn tmux_control_mode(&self) -> bool {
+        self.info.tmux_control_mode
+    }
+
     pub fn is_subshell_or_ssh(&self) -> bool {
         matches!(self.session_type(), SessionType::WarpifiedRemote { .. })
             || self.is_legacy_ssh_session()

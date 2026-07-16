@@ -19,6 +19,7 @@ use crate::server::telemetry::ImageProtocol;
 use crate::terminal::model::block::{BlockMetadata, SerializedBlock};
 use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::terminal_model::HandlerEvent;
+use crate::terminal::model::tmux::commands::TmuxWorkspace;
 use crate::terminal::shell::ShellType;
 use crate::terminal::ClipboardType;
 use crate::util::AsciiDebug;
@@ -85,6 +86,7 @@ pub enum Event {
     TmuxControlModeReady {
         primary_pane: u32,
     },
+    TmuxWorkspaceSnapshot(Vec<TmuxWorkspace>),
     /// See comment above [crate::terminal::ModelEvent::DetectedEndOfSshLogin].
     DetectedEndOfSshLogin(SshLoginStatus),
     RemoteWarpificationIsUnavailable(WarpificationUnavailableReason),
@@ -461,6 +463,9 @@ impl Debug for Event {
             Event::TerminalModeSwapped(_) => write!(f, "Terminal mode swapped"),
             Event::TmuxControlModeReady { primary_pane } => {
                 write!(f, "TmuxControlModeReady(primary_pane: {primary_pane})")
+            }
+            Event::TmuxWorkspaceSnapshot(workspaces) => {
+                write!(f, "TmuxWorkspaceSnapshot({} pages)", workspaces.len())
             }
             Event::DetectedEndOfSshLogin(check_type) => {
                 write!(f, "DetectedEndOfSshLogin: {check_type:?}")

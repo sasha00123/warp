@@ -101,6 +101,14 @@ pub fn ssh_session(ctx: &GeneratorContext) -> Option<ChipValue> {
     }
 }
 
+/// Contextual generator for the tmux page chip. Inventory is fetched through control mode,
+/// so rendering the prompt never creates a temporary tmux window.
+pub fn tmux_workspace(ctx: &GeneratorContext) -> Option<ChipValue> {
+    ctx.active_session
+        .filter(|session| session.tmux_control_mode())
+        .map(|_| ChipValue::Text("tmux".to_string()))
+}
+
 /// Generator function for Subshell session chip.
 pub fn subshell(ctx: &GeneratorContext) -> Option<ChipValue> {
     let session = ctx.active_session?;

@@ -77,4 +77,51 @@ function _check_tmux
     return 1
 end
 
-_check_tmux; and command $TMUX -Lwarp -CC; and exit
+function _warp_tmux_session_name
+    if set -q WARP_SSH_TMUX_SESSION; and test -n "$WARP_SSH_TMUX_SESSION"
+        set session_name "$WARP_SSH_TMUX_SESSION"
+    else
+        set host (hostname 2>/dev/null; or uname -n)
+        set user (whoami 2>/dev/null; or echo "$USER")
+        set session_name "warp-$user-$host"
+    end
+
+    set sanitized_session_name (printf '%s' "$session_name" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-80)
+    if test -n "$sanitized_session_name"
+        printf '%s' "$sanitized_session_name"
+    else
+        printf '%s' "warp-default"
+    end
+end
+
+function _warp_tmux_attach
+    set session_name (_warp_tmux_session_name)
+    set window_name "warp-"(date +%s)
+
+    if command $TMUX -Lwarp has-session -t "$session_name" 2>/dev/null
+        command $TMUX -Lwarp set-option -g history-limit 1000000 2>/dev/null
+        command $TMUX -Lwarp set-window-option -g remain-on-exit off 2>/dev/null
+        set target (command $TMUX -Lwarp new-window -d -P -F '#{window_id} #{pane_id}' -t "$session_name:" -n "$window_name")
+    else
+        command $TMUX -Lwarp new-session -d -s "$session_name" -n warp-bootstrap; or return 1
+        command $TMUX -Lwarp set-option -g history-limit 1000000 2>/dev/null
+        command $TMUX -Lwarp set-window-option -g remain-on-exit off 2>/dev/null
+        set target (command $TMUX -Lwarp new-window -d -P -F '#{window_id} #{pane_id}' -t "$session_name:" -n "$window_name")
+        command $TMUX -Lwarp kill-window -t "$session_name:warp-bootstrap" 2>/dev/null
+    end
+
+    set target_parts (string split ' ' -- "$target")
+    test (count $target_parts) -ge 2; or return 1
+    set window_id $target_parts[1]
+    set pane_id $target_parts[2]
+
+    command $TMUX -Lwarp set-option -t "$session_name" destroy-unattached off 2>/dev/null
+    command $TMUX -Lwarp set-option -t "$session_name" allow-passthrough on 2>/dev/null
+    command $TMUX -Lwarp set-environment -u -t "$session_name" WARP_BOOTSTRAPPED 2>/dev/null
+    command $TMUX -Lwarp select-window -t "$window_id" 2>/dev/null
+    command $TMUX -Lwarp select-pane -t "$pane_id" 2>/dev/null
+    set -e WARP_BOOTSTRAPPED
+    command $TMUX -Lwarp -CC attach-session -t "$session_name"
+end
+
+_check_tmux; and _warp_tmux_attach; and exit

@@ -48,4 +48,21 @@ function _check_tmux
     return 1
 end
 
-_check_tmux; and $TMUX -Lwarp -CC; and exit
+function _warp_tmux_session_name
+    if set -q WARP_SSH_TMUX_SESSION; and test -n "$WARP_SSH_TMUX_SESSION"
+        set session_name "$WARP_SSH_TMUX_SESSION"
+    else
+        set host (hostname 2>/dev/null; or uname -n)
+        set user (whoami 2>/dev/null; or echo "$USER")
+        set session_name "warp-$user-$host"
+    end
+
+    set sanitized_session_name (printf '%s' "$session_name" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-80)
+    if test -n "$sanitized_session_name"
+        printf '%s' "$sanitized_session_name"
+    else
+        printf '%s' "warp-default"
+    end
+end
+
+_check_tmux; and $TMUX -Lwarp -CC new-session -A -s (_warp_tmux_session_name); and exit

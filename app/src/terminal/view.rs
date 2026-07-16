@@ -13161,6 +13161,11 @@ impl TerminalView {
             ModelEvent::TmuxControlModeReady { .. } => {
                 self.trigger_subshell_bootstrap(None, false, ctx);
             }
+            ModelEvent::TmuxWorkspaceSnapshot(workspaces) => {
+                self.input.update(ctx, |input, ctx| {
+                    input.update_tmux_workspaces(workspaces.clone(), ctx)
+                });
+            }
             ModelEvent::DetectedEndOfSshLogin(check_type) => {
                 self.handle_detected_end_of_ssh_login(check_type, ctx);
             }
@@ -21716,6 +21721,11 @@ impl TerminalView {
                     self.interrupt_onboarding_blocks(ctx);
                 }
             }
+            InputEvent::RunTmuxCommand(command) => {
+                if !self.model.lock().run_tmux_command(command.clone()) {
+                    log::warn!("Tried to run a tmux page command outside control mode");
+                }
+            }
             InputEvent::ExecuteAIQuery => {
                 // Clear the "enter again to send" ephemeral message if it's currently showing
                 self.ephemeral_message_model.update(ctx, |model, ctx| {
@@ -26298,7 +26308,12 @@ impl TerminalView {
                     ref command,
                 } = ssh_interactive_session_event
                 {
-                    if FeatureFlag::WarpifyFooter.is_enabled() {
+                    // PoC: go straight into the persistent tmux SSH wrapper instead of asking the
+                    // user to confirm warpification.
+                    const FORCE_PERSISTENT_SSH_TMUX_POC: bool = true;
+                    if FORCE_PERSISTENT_SSH_TMUX_POC {
+                        self.add_ssh_warpifying_block(ctx);
+                    } else if FeatureFlag::WarpifyFooter.is_enabled() {
                         self.show_warpify_footer(
                             WarpificationMode::ssh(command.clone(), host.to_owned()),
                             ctx,

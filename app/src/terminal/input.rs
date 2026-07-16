@@ -115,6 +115,7 @@ use super::model::block::{
     AgentInteractionMetadata, BlockId, BlockMetadata, BlocklistEnvVarMetadata,
 };
 use super::model::session::{Session, SessionId, SessionType, Sessions};
+use super::model::tmux::commands::{TmuxCommand, TmuxWorkspace};
 use super::prompt_render_helper::{
     should_render_prompt_on_same_line, should_render_prompt_using_editor_decorator_elements,
     PromptRenderHelper, SameLinePromptElements,
@@ -1018,6 +1019,7 @@ pub enum Event {
     },
     Enter,
     ExecuteCommand(Box<ExecuteCommandEvent>),
+    RunTmuxCommand(TmuxCommand),
     ExecuteAIQuery,
     EmacsBindingUsed,
     /// The input editor was locally edited and
@@ -6209,6 +6211,9 @@ impl Input {
                     }
                 }
             }
+            PromptDisplayEvent::RunTmuxCommand(command) => {
+                ctx.emit(Event::RunTmuxCommand(command.clone()));
+            }
             PromptDisplayEvent::OpenAIDocument {
                 document_id,
                 document_version,
@@ -6219,6 +6224,18 @@ impl Input {
                 });
             }
         }
+    }
+
+    pub fn update_tmux_workspaces(
+        &mut self,
+        workspaces: Vec<TmuxWorkspace>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.prompt_render_helper
+            .prompt_view()
+            .update(ctx, |prompt, ctx| {
+                prompt.update_tmux_workspaces(workspaces, ctx)
+            });
     }
 
     fn open_file_in_code_editor(

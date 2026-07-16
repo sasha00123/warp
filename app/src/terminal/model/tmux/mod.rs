@@ -4,6 +4,7 @@ use lazy_static::lazy_static;
 use regex::bytes::{Regex, RegexBuilder};
 
 use crate::terminal::event::ExecutedExecutorCommandEvent;
+use crate::terminal::model::tmux::commands::TmuxWorkspace;
 use crate::util::parse_ascii_u32;
 
 pub enum ControlModeEvent {
@@ -21,6 +22,8 @@ pub enum ControlModeEvent {
     /// This event is sent when Control Mode informs us of pane output
     /// that is coming from a pane which is not the primary pane.
     BackgroundPaneOutput { pane: u32, byte: u8 },
+    /// A fresh snapshot of the persistent pages in the attached session.
+    WorkspaceSnapshot(Vec<TmuxWorkspace>),
     /// This event is sent when Control Mode has been exited.
     Exited,
 }

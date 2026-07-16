@@ -257,6 +257,7 @@ impl TmuxControlMode {
                 ansi_processor: Box::new(Processor::new()),
                 pane_for_window: Default::default(),
                 primary_pane: PrimaryPaneState::new(),
+                pending_history_capture: None,
             },
         }
     }
@@ -266,6 +267,7 @@ struct TmuxControlModeState {
     ansi_processor: Box<Processor>,
     pane_for_window: HashMap<u32, u32>,
     primary_pane: PrimaryPaneState,
+    pending_history_capture: Option<u32>,
 }
 
 /// State to keep track of Synchronized Output.
@@ -869,7 +871,10 @@ where
 
     #[inline]
     fn hook(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, c: char) {
-        if FeatureFlag::SSHTmuxWrapper.is_enabled()
+        // PoC: detect tmux control mode in local OSS builds without requiring the gated
+        // upstream feature flag.
+        const FORCE_PERSISTENT_SSH_TMUX_POC: bool = true;
+        if (FORCE_PERSISTENT_SSH_TMUX_POC || FeatureFlag::SSHTmuxWrapper.is_enabled())
             && c == 'p'
             && params.len() == 1
             && params.iter().next() == Some(&[1000])
@@ -1793,33 +1798,50 @@ impl<'a, H: Handler + 'a, W: io::Write> TmuxPerformer<'a, H, W> {
             },
         );
 
-        let PrimaryPaneState::Pending { pane_output_map } = previous_pane_state else {
-            log::error!("Received primary pane initialization message after primary pane was already initialized!");
-            return;
-        };
-
         self.handler
             .tmux_control_mode_event(ControlModeEvent::ControlModeReady {
                 primary_window,
                 primary_pane,
             });
 
-        for (pane, bytes) in pane_output_map.into_iter() {
-            if primary_pane == pane {
-                for byte in bytes.iter() {
-                    self.process_primary_pane_output(*byte, primary_pane);
-                }
-                self.handler
-                    .on_finish_byte_processing(&ProcessorInput::new(&bytes));
-            } else {
-                for byte in bytes {
+        if let PrimaryPaneState::Pending { pane_output_map } = previous_pane_state {
+            for (pane, bytes) in pane_output_map.into_iter() {
+                if primary_pane == pane {
+                    for byte in bytes.iter() {
+                        self.process_primary_pane_output(*byte, primary_pane);
+                    }
                     self.handler
-                        .tmux_control_mode_event(ControlModeEvent::BackgroundPaneOutput {
-                            pane,
-                            byte,
-                        });
+                        .on_finish_byte_processing(&ProcessorInput::new(&bytes));
+                } else {
+                    for byte in bytes {
+                        self.handler
+                            .tmux_control_mode_event(ControlModeEvent::BackgroundPaneOutput {
+                                pane,
+                                byte,
+                            });
+                    }
                 }
             }
+        }
+    }
+
+    fn replay_primary_pane_history(&mut self, pane_id: u32, lines: Vec<Vec<u8>>) {
+        let is_primary = matches!(
+            self.state.primary_pane,
+            PrimaryPaneState::Ready { pane_id: primary } if primary == pane_id
+        );
+        if !is_primary {
+            return;
+        }
+
+        let mut history = b"\x1b[2J\x1b[H".to_vec();
+        for line in lines {
+            history.extend_from_slice(&line);
+            history.extend_from_slice(b"\r\n");
+        }
+        for byte in history {
+            self.primary_pane_output.push(byte);
+            self.process_primary_pane_output(byte, pane_id);
         }
     }
 
@@ -1896,6 +1918,12 @@ where
             }
             TmuxMessage::CommandOutput { output_lines } => {
                 if let Ok(output_lines) = output_lines {
+                    if let Some(pane_id) = self.state.pending_history_capture.take() {
+                        self.replay_primary_pane_history(pane_id, output_lines);
+                        return;
+                    }
+
+                    let mut workspaces = Vec::new();
                     for line in output_lines {
                         let Some(command) = parse_command(line) else {
                             continue;
@@ -1905,11 +1933,25 @@ where
                                 self.state.pane_for_window.insert(window_id, pane_id);
                                 self.init_primary_pane(window_id, pane_id);
                             }
+                            TmuxCommandResponse::SelectedWindowPane { window_id, pane_id } => {
+                                self.state.pane_for_window.insert(window_id, pane_id);
+                                self.init_primary_pane(window_id, pane_id);
+                                self.state.pending_history_capture = Some(pane_id);
+                            }
+                            TmuxCommandResponse::Workspace(workspace) => {
+                                workspaces.push(workspace);
+                            }
                             TmuxCommandResponse::BackgroundWindow { window_id, pane_id } => {
                                 self.state.pane_for_window.insert(window_id, pane_id);
                             }
                         }
                     }
+                    if !workspaces.is_empty() {
+                        self.handler
+                            .tmux_control_mode_event(ControlModeEvent::WorkspaceSnapshot(workspaces));
+                    }
+                } else {
+                    self.state.pending_history_capture = None;
                 }
             }
             TmuxMessage::Unknown { tag: _, rest: _ } => {}

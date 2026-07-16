@@ -193,7 +193,10 @@ fn new_command_executor_for_local_tty_session(
         }
     }
 
-    if FeatureFlag::SSHTmuxWrapper.is_enabled()
+    // PoC: allow the tmux command executor even when the upstream feature flag is not enabled
+    // for this local OSS build.
+    const FORCE_PERSISTENT_SSH_TMUX_POC: bool = true;
+    if (FORCE_PERSISTENT_SSH_TMUX_POC || FeatureFlag::SSHTmuxWrapper.is_enabled())
         && session_info.tmux_control_mode
         // We don't allow nested tmux warpification, so if our parent session is already warified using
         // tmux then we shouldn't.
