@@ -55,6 +55,7 @@ use crate::terminal::shared_session::sharer::network::Network;
 use crate::terminal::shared_session::{IsSharedSessionCreator, SharedSessionStatus};
 use crate::terminal::shell::ShellName;
 use crate::terminal::terminal_manager::BlockSpacing;
+use crate::terminal::view::{ConversationRestorationInNewPaneType, Event as TerminalViewEvent};
 use crate::terminal::warpify::settings::WarpifySettings;
 use crate::terminal::writeable_pty::pty_controller::{EventLoopSendError, EventLoopSender};
 use crate::terminal::writeable_pty::terminal_manager_util::{
@@ -751,13 +752,15 @@ impl<S> TerminalManager<S> {
                     .contains(&ContextChipKind::NodeVersion)
         };
 
-        // `enable_ssh_warpification` is the single source of truth for whether the SSH
-        // wrapper is active. The bootstrap scripts check `WARP_USE_SSH_WRAPPER` (derived
-        // from this value) before invoking `warp_ssh_helper`, which spawns the ControlMaster
-        // and opens agent-protocol channels.
-        let enable_ssh_wrapper = *WarpifySettings::as_ref(ctx)
-            .enable_ssh_warpification
-            .value();
+        // The TMUX SSH wrapper supercedes the original ControlMaster wrapper.
+        let enable_ssh_wrapper = if FeatureFlag::SSHTmuxWrapper.is_enabled() {
+            *WarpifySettings::as_ref(ctx)
+                .enable_ssh_warpification
+                .value()
+                && !*WarpifySettings::as_ref(ctx).use_ssh_tmux_wrapper.value()
+        } else {
+            *SshSettings::as_ref(ctx).enable_legacy_ssh_wrapper.value()
+        };
 
         // Only meaningful when the legacy ControlMaster wrapper is active.
         let reuse_ssh_control_master = enable_ssh_wrapper

@@ -66,6 +66,7 @@ impl WarpifySuccessBlock {
         spawning_command: String,
         subshell_info: Option<SubshellInitializationInfo>,
         shell: Shell,
+        disable_tmux: bool,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&WarpifySettings::handle(ctx), move |_, _, _, ctx| {
@@ -92,6 +93,7 @@ impl WarpifySuccessBlock {
                         &subshell_info,
                         shell.shell_type(),
                         remote_os,
+                        disable_tmux,
                     );
                     if command.is_empty() {
                         return ("".into(), false);

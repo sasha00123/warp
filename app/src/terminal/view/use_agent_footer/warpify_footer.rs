@@ -8,21 +8,21 @@ use warpui::prelude::Empty;
 use warpui::{AppContext, Element, Entity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::{AgentFooterButtonTheme, USE_AGENT_KEYSTROKE};
+use crate::terminal::view::block_banner::WarpificationMode;
 use crate::terminal::view::{TerminalModel, PADDING_LEFT};
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{
     ActionButton, ButtonSize, KeystrokeSource, TooltipAlignment,
 };
 
-/// Footer view rendered for detected subshell commands, offering both
+/// Footer view rendered for detected subshell/SSH commands, offering both
 /// "Warpify" and "Use agent" buttons in a horizontal row.
 pub(super) struct WarpifyFooterView {
     terminal_model: Arc<FairMutex<TerminalModel>>,
     warpify_button: ViewHandle<ActionButton>,
     use_agent_button: ViewHandle<ActionButton>,
     dismiss_button: ViewHandle<ActionButton>,
-    /// Whether the footer is currently offering subshell warpification.
-    is_active: bool,
+    mode: Option<WarpificationMode>,
 }
 
 impl WarpifyFooterView {
@@ -65,30 +65,34 @@ impl WarpifyFooterView {
             warpify_button,
             use_agent_button,
             dismiss_button,
-            is_active: false,
+            mode: None,
         }
     }
 
-    /// Activates the footer so it offers subshell warpification.
-    pub fn show(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Updates the warpify button label, keybinding, and stores the current warpification mode.
+    pub fn set_mode(&mut self, mode: WarpificationMode, ctx: &mut ViewContext<Self>) {
+        let (label, binding_name) = match mode {
+            WarpificationMode::Ssh { .. } => {
+                ("Warpify SSH session", "terminal:warpify_ssh_session")
+            }
+            WarpificationMode::Subshell { .. } => ("Warpify subshell", "terminal:warpify_subshell"),
+        };
         self.warpify_button.update(ctx, |button, ctx| {
-            button.set_keybinding(
-                Some(KeystrokeSource::Binding("terminal:warpify_subshell")),
-                ctx,
-            );
+            button.set_label(label, ctx);
+            button.set_keybinding(Some(KeystrokeSource::Binding(binding_name)), ctx);
         });
-        self.is_active = true;
+        self.mode = Some(mode);
         ctx.notify();
     }
 
-    /// Returns whether the footer is currently offering subshell warpification.
-    pub fn is_active(&self) -> bool {
-        self.is_active
+    /// Returns the current warpification mode, if set.
+    pub fn mode(&self) -> Option<&WarpificationMode> {
+        self.mode.as_ref()
     }
 
-    /// Deactivates the footer.
-    pub fn clear(&mut self, ctx: &mut ViewContext<Self>) {
-        self.is_active = false;
+    /// Clears the warpification mode.
+    pub fn clear_mode(&mut self, ctx: &mut ViewContext<Self>) {
+        self.mode = None;
         self.warpify_button.update(ctx, |button, ctx| {
             button.set_keybinding(None, ctx);
         });
@@ -104,7 +108,7 @@ pub enum WarpifyFooterViewAction {
 }
 
 pub enum WarpifyFooterViewEvent {
-    Warpify,
+    Warpify { mode: WarpificationMode },
     UseAgent,
     Dismiss,
 }
@@ -150,17 +154,17 @@ impl TypedActionView for WarpifyFooterView {
     fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
         match action {
             WarpifyFooterViewAction::Warpify => {
-                if self.is_active {
-                    self.clear(ctx);
-                    ctx.emit(WarpifyFooterViewEvent::Warpify);
+                if let Some(mode) = self.mode.clone() {
+                    self.clear_mode(ctx);
+                    ctx.emit(WarpifyFooterViewEvent::Warpify { mode });
                 }
             }
             WarpifyFooterViewAction::UseAgent => {
-                self.clear(ctx);
+                self.clear_mode(ctx);
                 ctx.emit(WarpifyFooterViewEvent::UseAgent);
             }
             WarpifyFooterViewAction::Dismiss => {
-                self.clear(ctx);
+                self.clear_mode(ctx);
                 ctx.emit(WarpifyFooterViewEvent::Dismiss);
             }
         }
