@@ -50,6 +50,8 @@ pub(crate) mod process_control;
 mod save_coordinator;
 mod skill_dirs_publish;
 mod telemetry;
+mod usage_reporting;
+use usage_reporting::UsageReporter;
 pub(crate) use claude_code::ClaudeHarness;
 use claude_transcript::ClaudeResumeInfo;
 use codex::CodexHarness;
@@ -541,6 +543,15 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
     ) -> Result<()>;
     /// Returns the coordinator owned by this runner for its full lifecycle.
     fn save_coordinator(&self) -> &SaveCoordinator;
+    fn usage_reporter(&self) -> Option<&UsageReporter> {
+        None
+    }
+
+    async fn publish_usage(&self) {
+        if let Some(reporter) = self.usage_reporter() {
+            reporter.publish().await;
+        }
+    }
 
     /// Queues a save without waiting for persistence; overlapping requests are coalesced.
     async fn request_save(
@@ -566,7 +577,9 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
                                 .context("Failed to handle harness session update before save")
                         );
                     }
-                    runner.save_conversation(save_point, &foreground).await
+                    let persistence = runner.save_conversation(save_point, &foreground).await;
+                    runner.publish_usage().await;
+                    persistence
                 })
             }),
             &background,
@@ -586,6 +599,7 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
                     );
                     self.save_conversation(SavePoint::Final, foreground).await
                 },
+                self.publish_usage(),
                 final_save_budget(),
             )
             .await
