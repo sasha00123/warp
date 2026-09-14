@@ -8,17 +8,16 @@ use chrono::{DateTime, Utc};
 use instant::Instant;
 use parking_lot::Mutex;
 use warp_harness_usage::{CaptureDiagnostics, ExtractionOutcome, JsonlReadStatus};
-use warpui::duration_with_jitter;
 use warpui::r#async::{FutureExt as _, Timer};
+use warpui::duration_with_jitter;
 
 use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::retry_strategies::is_transient_http_error;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::{
-    HARNESS_USAGE_METRICS_VERSION, HarnessSupportClient, HarnessUsageContext, HarnessUsageError,
-    HarnessUsageErrorKind, HarnessUsagePublication, HarnessUsageReport, UsageHarness,
-    upload_to_target,
+    HarnessSupportClient, HarnessUsageContext, HarnessUsageError, HarnessUsageErrorKind,
+    HarnessUsagePublication, HarnessUsageReport, UsageHarness, upload_to_target,
 };
 
 const MAX_ATTEMPTS: usize = 3;
@@ -44,14 +43,14 @@ impl CaptureIdentity {
         outcome: ExtractionOutcome,
     ) -> Option<HarnessUsageReport> {
         match outcome {
-            ExtractionOutcome::Usable(snapshot) => Some(HarnessUsageReport {
-                metrics_version: HARNESS_USAGE_METRICS_VERSION,
+            ExtractionOutcome::Usable(snapshot) => HarnessUsageReport::new(
                 harness,
-                execution_id: self.execution_id,
-                capture_sequence: self.sequence,
+                self.execution_id,
+                self.sequence,
                 captured_at,
-                snapshot: *snapshot,
-            }),
+                &snapshot,
+            )
+            .ok(),
             ExtractionOutcome::Unavailable(reasons) => {
                 log::debug!("Harness usage unavailable: reasons={reasons:?}");
                 None
@@ -77,12 +76,11 @@ impl UsageReporter {
         context: Option<HarnessUsageContext>,
     ) {
         let context = task_id.zip(context).and_then(|(task_id, context)| {
-            (context.metrics_version == HARNESS_USAGE_METRICS_VERSION && context.execution_id > 0)
-                .then_some(ReportingContext {
-                    task_id,
-                    execution_id: context.execution_id,
-                    client,
-                })
+            (context.execution_id > 0).then_some(ReportingContext {
+                task_id,
+                execution_id: context.execution_id,
+                client,
+            })
         });
         if context.is_none() {
             log::debug!("Harness usage disabled: no supported execution-bound startup context");
@@ -134,7 +132,9 @@ impl UsageReporter {
                     .report_harness_usage_for_task(&context.task_id, report)
                     .with_timeout(REQUEST_TIMEOUT)
                     .await
-                    .unwrap_or_else(|_| Err(HarnessUsageError::new(HarnessUsageErrorKind::Retryable)))
+                    .unwrap_or_else(|_| {
+                        Err(HarnessUsageError::new(HarnessUsageErrorKind::Retryable))
+                    })
             },
             wait_before_retry,
         )
@@ -208,7 +208,11 @@ pub(super) async fn upload_capture(
     reporter: &UsageReporter,
     capture: CapturedTranscript,
 ) -> Result<()> {
-    let attempts = if reporter.is_enabled() { MAX_ATTEMPTS } else { 1 };
+    let attempts = if reporter.is_enabled() {
+        MAX_ATTEMPTS
+    } else {
+        1
+    };
     for attempt in 1..=attempts {
         let result = async {
             let target = client.get_transcript_upload_target(conversation_id).await?;
@@ -243,7 +247,9 @@ where
 {
     for attempt in 1..=MAX_ATTEMPTS {
         match send(report).await {
-            Err(error) if error.kind == HarnessUsageErrorKind::Retryable && attempt < MAX_ATTEMPTS => {
+            Err(error)
+                if error.kind == HarnessUsageErrorKind::Retryable && attempt < MAX_ATTEMPTS =>
+            {
                 let delay = error.retry_after.unwrap_or_default().max(backoff(attempt));
                 // Retry-After cannot extend idle lifetime indefinitely.
                 if delay > REQUEST_TIMEOUT {

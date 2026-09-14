@@ -480,7 +480,14 @@ impl HarnessRunner for CodexHarnessRunner {
 
         let is_final = matches!(save_point, SavePoint::Final);
         save_transcript_and_block(
-            upload_transcript(client, &conversation_id, session_id, rollout_path, is_final, &self.usage),
+            upload_transcript(
+                client,
+                &conversation_id,
+                session_id,
+                rollout_path,
+                is_final,
+                &self.usage,
+            ),
             super::upload_current_block_snapshot(
                 foreground,
                 &self.terminal_driver,
@@ -532,31 +539,48 @@ async fn upload_transcript(
             tokio::task::spawn_blocking(move || -> Result<CapturedTranscript> {
                 let captured_at = Utc::now();
                 let capture = read_jsonl_capture(&transcript_path)?;
-                if (is_final || identity.is_some()) && capture.diagnostics.status == JsonlReadStatus::Missing {
+                if (is_final || identity.is_some())
+                    && capture.diagnostics.status == JsonlReadStatus::Missing
+                {
                     anyhow::bail!("Codex transcript disappeared before final save");
                 }
-                if capture.diagnostics.status == JsonlReadStatus::Unreadable && capture.entries.is_empty() {
+                if capture.diagnostics.status == JsonlReadStatus::Unreadable
+                    && capture.entries.is_empty()
+                {
                     anyhow::bail!("Codex transcript could not be read");
                 }
-                if identity.is_some() && capture.entries.is_empty() && !capture.diagnostics.is_complete() {
+                if identity.is_some()
+                    && capture.entries.is_empty()
+                    && !capture.diagnostics.is_complete()
+                {
                     anyhow::bail!("Codex transcript has no complete readable records");
                 }
                 let metadata = parse_session_meta(capture.entries.first()).unwrap_or_default();
                 let envelope = CodexTranscriptEnvelope::new(session_id, metadata, capture.entries);
                 let body = serde_json::to_vec(&envelope)
                     .context("Failed to serialize codex transcript")?;
-                let diagnostics = CaptureDiagnostics { root: capture.diagnostics, ..Default::default() };
-                let report = identity.and_then(|identity| identity.report(
-                    UsageHarness::Codex,
-                    captured_at,
-                    extract_codex(&session_id.to_string(), &envelope.entries, &diagnostics),
-                ));
-                Ok(CapturedTranscript { body, report, needs_retry: needs_capture_retry(&diagnostics) })
+                let diagnostics = CaptureDiagnostics {
+                    root: capture.diagnostics,
+                    ..Default::default()
+                };
+                let report = identity.and_then(|identity| {
+                    identity.report(
+                        UsageHarness::Codex,
+                        captured_at,
+                        extract_codex(&session_id.to_string(), &envelope.entries, &diagnostics),
+                    )
+                });
+                Ok(CapturedTranscript {
+                    body,
+                    report,
+                    needs_retry: needs_capture_retry(&diagnostics),
+                })
             })
             .await
             .context("Native transcript capture task failed")?
         }
-    }).await?;
+    })
+    .await?;
     upload_capture(client, conversation_id, reporter, capture).await
 }
 

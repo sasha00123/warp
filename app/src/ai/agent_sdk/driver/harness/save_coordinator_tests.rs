@@ -17,18 +17,28 @@ use crate::ai::agent_sdk::driver::harness::SavePoint;
 async fn metrics_timeout_preserves_completed_persistence_and_drops_publication() {
     let coordinator = SaveCoordinator::default();
     let (release, released) = oneshot::channel::<()>();
-    let result = coordinator.finish(
-        future::ready(Ok(())),
-        async { let _ = released.await; },
-        Duration::from_millis(10),
-    ).await;
+    let result = coordinator
+        .finish(
+            future::ready(Ok(())),
+            async {
+                let _ = released.await;
+            },
+            Duration::from_millis(10),
+        )
+        .await;
     assert!(result.is_ok());
     assert!(release.send(()).is_err());
-    assert!(coordinator.finish(
-        future::pending::<Result<()>>(),
-        future::pending(),
-        Duration::from_secs(30),
-    ).now_or_never().unwrap().is_ok());
+    assert!(
+        coordinator
+            .finish(
+                future::pending::<Result<()>>(),
+                future::pending(),
+                Duration::from_secs(30),
+            )
+            .now_or_never()
+            .unwrap()
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -187,7 +197,7 @@ async fn expired_final_deadline_never_starts_or_rearms_a_save() {
                     Ok(())
                 },
                 future::ready(()),
-            Duration::ZERO,
+                Duration::ZERO,
             )
             .await
             .is_err()
@@ -200,7 +210,7 @@ async fn expired_final_deadline_never_starts_or_rearms_a_save() {
                     Ok(())
                 },
                 future::ready(()),
-            Duration::from_secs(30),
+                Duration::from_secs(30),
             )
             .await
             .is_err()
@@ -222,7 +232,7 @@ async fn final_timeout_cancels_future_before_returning() {
                     Ok(())
                 },
                 future::ready(()),
-            Duration::from_millis(10),
+                Duration::from_millis(10),
             )
             .await
             .is_err()
@@ -250,7 +260,11 @@ async fn interrupted_finalizer_still_joins_the_cancelled_worker() {
     start.await.unwrap();
     assert!(
         coordinator
-            .finish(future::pending::<Result<()>>(), future::ready(()), Duration::from_secs(5))
+            .finish(
+                future::pending::<Result<()>>(),
+                future::ready(()),
+                Duration::from_secs(5)
+            )
             .now_or_never()
             .is_none()
     );
@@ -281,7 +295,11 @@ async fn final_failure_is_retained_without_repeating_writes() {
     assert!(result.is_err());
     assert!(
         coordinator
-            .finish(future::pending::<Result<()>>(), future::ready(()), Duration::from_secs(5))
+            .finish(
+                future::pending::<Result<()>>(),
+                future::ready(()),
+                Duration::from_secs(5)
+            )
             .now_or_never()
             .unwrap()
             .is_err()

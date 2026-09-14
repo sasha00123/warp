@@ -662,22 +662,32 @@ async fn upload_transcript(
                 envelope.claude_version = claude_version;
                 let body = serde_json::to_vec(&envelope)
                     .context("Failed to serialize transcript envelope")?;
-                let report = identity.and_then(|identity| identity.report(
-                    UsageHarness::ClaudeCode,
-                    captured_at,
-                    extract_claude(
-                        &session_id.to_string(),
-                        &envelope.entries,
-                        envelope.subagents.iter().map(|(id, entries)| (id.as_str(), entries.as_slice())),
-                        &diagnostics,
-                    ),
-                ));
-                Ok(CapturedTranscript { body, report, needs_retry: needs_capture_retry(&diagnostics) })
+                let report = identity.and_then(|identity| {
+                    identity.report(
+                        UsageHarness::ClaudeCode,
+                        captured_at,
+                        extract_claude(
+                            &session_id.to_string(),
+                            &envelope.entries,
+                            envelope
+                                .subagents
+                                .iter()
+                                .map(|(id, entries)| (id.as_str(), entries.as_slice())),
+                            &diagnostics,
+                        ),
+                    )
+                });
+                Ok(CapturedTranscript {
+                    body,
+                    report,
+                    needs_retry: needs_capture_retry(&diagnostics),
+                })
             })
             .await
             .context("Native transcript capture task failed")?
         }
-    }).await?;
+    })
+    .await?;
     upload_capture(client, conversation_id, reporter, capture).await
 }
 pub(crate) fn prepare_claude_environment_config(

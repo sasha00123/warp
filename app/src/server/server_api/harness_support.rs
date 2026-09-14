@@ -11,9 +11,12 @@ use http::header::{CONTENT_TYPE, RETRY_AFTER};
 use http_client::StatusCode;
 #[cfg(test)]
 use mockall::automock;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
-use warp_harness_usage::{CoverageStatus, NativePayload, UsageSnapshot};
+
+#[path = "harness_usage.rs"]
+mod harness_usage;
+pub use harness_usage::{HarnessUsageReport, UsageHarness};
 
 use super::ServerApi;
 #[cfg(feature = "local_fs")]
@@ -43,7 +46,6 @@ pub struct UploadTarget {
 /// Execution ownership supplied only by authenticated, reporting-enabled startup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct HarnessUsageContext {
-    pub metrics_version: u32,
     pub execution_id: i64,
 }
 
@@ -54,83 +56,13 @@ where
     D: Deserializer<'de>,
 {
     let value = Value::deserialize(deserializer)?;
-    // Capability disagreement must not break raw transcript persistence or resume.
+    // Malformed capability data must not break raw transcript persistence or resume.
     Ok(serde_json::from_value::<HarnessUsageContext>(value)
         .ok()
-        .filter(|context| {
-            context.metrics_version == HARNESS_USAGE_METRICS_VERSION && context.execution_id > 0
-        }))
+        .filter(|context| context.execution_id > 0))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum UsageHarness {
-    ClaudeCode,
-    Codex,
-}
-
-
-/// One cumulative capture, retained unchanged across publication retries.
-#[derive(Clone, serde::Serialize)]
-pub struct HarnessUsageReport {
-    pub metrics_version: u32,
-    pub harness: UsageHarness,
-    pub execution_id: i64,
-    pub capture_sequence: i64,
-    pub captured_at: DateTime<Utc>,
-    #[serde(serialize_with = "serialize_usage_snapshot")]
-    pub snapshot: UsageSnapshot,
-}
-pub const HARNESS_USAGE_METRICS_VERSION: u32 = 1;
-
-const HARNESS_USAGE_MAX_BODY_BYTES: usize = 1024 * 1024;
 const HARNESS_USAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-#[derive(Serialize)]
-struct UsageSnapshotWire<'a> {
-    payload: &'a NativePayload,
-    coverage: UsageCoverageWire,
-}
-
-#[derive(Serialize)]
-struct UsageCoverageWire {
-    token_status: CoverageStatus,
-    tool_status: CoverageStatus,
-}
-
-fn serialize_usage_snapshot<S>(snapshot: &UsageSnapshot, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    UsageSnapshotWire {
-        payload: &snapshot.payload,
-        coverage: UsageCoverageWire {
-            token_status: snapshot.coverage.token_status,
-            tool_status: snapshot.coverage.tool_status,
-        },
-    }
-    .serialize(serializer)
-}
-
-impl HarnessUsageReport {
-    fn encode(&self) -> Result<Vec<u8>, HarnessUsageError> {
-        let snapshot = &self.snapshot;
-        let coverage = &snapshot.coverage;
-        if self.metrics_version != HARNESS_USAGE_METRICS_VERSION
-            || self.execution_id <= 0
-            || self.capture_sequence <= 0
-            || (coverage.token_status == CoverageStatus::Unavailable
-                && coverage.tool_status == CoverageStatus::Unavailable)
-        {
-            return Err(HarnessUsageError::new(HarnessUsageErrorKind::InvalidReport));
-        }
-        let body = serde_json::to_vec(self)
-            .map_err(|_| HarnessUsageError::new(HarnessUsageErrorKind::InvalidReport))?;
-        if body.len() > HARNESS_USAGE_MAX_BODY_BYTES {
-            return Err(HarnessUsageError::new(HarnessUsageErrorKind::InvalidReport));
-        }
-        Ok(body)
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -624,7 +556,9 @@ impl ServerApi {
         task_id: &AmbientAgentTaskId,
         report: &HarnessUsageReport,
     ) -> Result<HarnessUsagePublication, HarnessUsageError> {
-        let body = report.encode()?;
+        let body = report
+            .encode()
+            .map_err(|_| HarnessUsageError::new(HarnessUsageErrorKind::InvalidReport))?;
         let auth_token = self
             .get_or_refresh_access_token()
             .await
@@ -662,11 +596,12 @@ impl ServerApi {
             .json::<HarnessUsagePublication>()
             .await
             .map_err(|error| {
-                HarnessUsageError::new(if error.is_decode() {
+                let kind = if error.is_decode() {
                     HarnessUsageErrorKind::InvalidResponse
                 } else {
                     HarnessUsageErrorKind::Retryable
-                })
+                };
+                HarnessUsageError::new(kind)
             })?;
         if publication.execution_id <= 0
             || publication.capture_sequence <= 0

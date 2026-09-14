@@ -30,36 +30,39 @@ uncommitted work from another thread.
 
 ## Proposed changes
 ### Phase 1: Execution-bound startup and transport
-Add Rust transport types and a publication method to `app/src/server/server_api/harness_support.rs`.
+Keep the publication method in `app/src/server/server_api/harness_support.rs` and handwritten wire
+types in its `harness_usage.rs` module.
 Reuse the existing task authentication, run headers, workload token, and HTTP client. Do not add a
 secret, decode execution identity from an unverified token, or modify generic shutdown authentication.
 
-The [current HTTP schema](https://github.com/warpdotdev/warp-server/blob/48f345143bf0364334fb2260b926b857241956f4/public_api/openapi.yaml)
-accepts `POST /api/v1/harness-support/harness-usage` with:
-- `metrics_version` (1), `harness` (`CLAUDE_CODE` or `CODEX`), `execution_id`,
+The server's `public_api/openapi.yaml` defines `POST /api/v1/harness-support/harness-usage` with:
+- `harness` (`CLAUDE_CODE` or `CODEX`), positive `execution_id`,
   positive `capture_sequence`, and read-start `captured_at`.
-- `snapshot`: an object `payload`; `coverage` with independent `token_status` and `tool_status`,
-  and no other fields. Payload contains only native metrics and necessary metric breakdowns.
+- `snapshot`: typed `payload`; `coverage` with independent `token_status` and `tool_status`,
+  and no other fields. The harness selects the concrete Claude or Codex payload contract.
 - Status `accepted`, `ignored_older_capture`, or `idempotent`, plus retained execution/capture identity.
 
-Metrics version covers both native counting and wire format. Scope is fixed per harness/version;
-missing expected inputs degrade coverage rather than change scope. Reason counts and native
+The POST has no caller-supplied metrics or parser version. The server validates the submitted fields
+against its contract; an older producer remains compatible when its data satisfies that contract.
+The running client uses compiled Rust types and Serde, with no schema fetch, comparison, negotiation,
+or Rust code generation. Scope and native counting meanings are fixed by the harness contract;
+changing their meaning requires an explicit contract change, not merely a parser update.
+Missing expected inputs degrade coverage rather than change scope. Reason counts and native
 session/root/subagent/captured-scope identifiers stay producer-local, never in a publication request
-or retained metrics at any nesting level. A thin wire adapter omits these local extraction fields.
+or retained metrics at any nesting level. The wire adapter copies each native metric into separate
+API DTOs rather than serializing extractor types, and rejects mismatched harness/payload combinations.
 
 The authorized read is `GET /api/v1/agent/runs/{runId}/harness-usage`. Its `usage` object contains the
-stored envelope, whose field naming differs from the snake-case publication DTO. Use explicit
+typed retained envelope, whose field naming differs from the snake-case publication DTO.
+Its `metricsVersion: 1` is server-owned storage metadata, not the producer's parser version. Use explicit
 transport types and wire tests, not serialization of the stored envelope as a request. The read
 endpoint is for inspection, not a per-save prerequisite.
 
-**Server handoff required before live enablement:** add optional reporting context to the existing
-authenticated startup/resolve-prompt exchange. Proposed shape: `harness_usage` containing
-`metrics_version` and `execution_id`.
-Missing/null means unsupported or disabled. Exact naming and error codes must be agreed with the
-API owner; these fields do not exist in the inspected published response. The response must validate
+**Startup capability:** the authenticated resolve-prompt exchange supplies optional `harness_usage`
+containing `execution_id`. Missing/null means unsupported or disabled. The server must validate
 credentials against that execution, not merely return the newest execution after generic auth.
-The client binds resolve-prompt and reporting to the same explicit task identity. Current server
-startup does not advertise the capability, so publication remains disabled until this handoff.
+The client binds resolve-prompt and reporting to the same explicit task identity and remains
+reporting-disabled without this capability.
 The server must also expose a stable nonretryable status for same-identity conflicts: the client
 disables on HTTP 409/412, never parses error prose, and can only apply bounded retries to a generic
 HTTP 500 response from an unmapped precondition failure.
@@ -129,9 +132,18 @@ integers above 2^53, use checked arithmetic within the server's signed-64-bit bo
 values with degraded coverage rather than clamping. `toolCalls.total` and `toolCalls.byName` describe
 the same deduplicated invocation set.
 
-The server treats `payload` as an object, not a provider-specific generated schema. Before landing
-extractors, fix compact v1 fixtures for native totals, model/unattributed attribution, and `toolCalls`
-with the server owners. Preserve provider field names and avoid an unbounded per-request ledger.
+The server defines named Claude/Codex schemas and rejects unknown metrics fields at every nesting
+level. Payloads retain `usage`, `attribution`, and `toolCalls` (`total`, `byName`). Claude usage retains
+its four token counters and nested `cache_creation` partitions; Codex retains its five native
+counters. Each attribution group has native usage and optional `model`, `service_tier`,
+`inference_geo`, and `speed`, with no invented unattributed bucket. Missing or null counters mean
+unmeasured; measured zero remains zero. Every measured count is a nonnegative signed-64-bit integer.
+The server checks `toolCalls.total` against the overflow-checked sum of `byName`, but does not infer
+token-total equations across native categories. Known/partial coverage requires measured data,
+unavailable requires no measured data, and at least one category must be usable.
+The common POST fixtures in `app/src/server/server_api/testdata/harness_usage/{claude,codex}.json`
+anchor Rust serialization and server validation/storage/read tests. Preserve provider field names
+and avoid an unbounded per-request ledger.
 Publication body cap: 1 MiB, or a smaller final API limit. Bound local scope/collection/identifier
 state; an oversized report is a diagnosed non-publication, not silent truncation of
 counts or coverage. Do not apply this metrics-body cap to existing raw transcript uploads.
@@ -204,10 +216,12 @@ No stability probes certify that native writing has stopped. Post-turn capture c
 saving is best-effort even when the task is already marked successful. Metrics failures do not
 override the harness result or prevent status/shutdown delivery.
 
-Ship server support first. Use server capability rather than a staging-only code check; missing
-capability preserves the existing save path. Disabling reporting stops new metrics requests without
-changing raw upload/download/resume or deleting retained metrics. Update the Warp/Oz executable or
-sidecar containing the producer, not a separate `oz-agent-worker` extraction job.
+Ship server support first. Use the optional `harness_usage.execution_id` returned by the existing
+`resolve-prompt` response as the server capability; the server does not negotiate the metrics
+contract or require a version argument. Missing capability
+preserves the existing save path. Disabling reporting stops new metrics requests without changing
+raw upload/download/resume or deleting retained metrics. Update the Warp/Oz executable or sidecar
+containing the producer, not a separate `oz-agent-worker` extraction job.
 
 Keep capture/extraction/publication timing, byte size, and bounded outcomes observable. Follow the
 repository's logging guidance; do not log raw records, tool arguments/results, credentials, or signed
@@ -229,9 +243,12 @@ mocked transport for sequencing rather than broad end-to-end tests for every per
   independence, upload-success/report-failure retry, late appends, idle retry exhaustion, final draining/
   timeout, and no publication after closing. Assert capture bytes and metrics share input and retry
   identity/time is stable. Metrics errors must not change cleanup/resume disposition.
-- **PRODUCT 2, 10, 13:** Transport tests cover wire field names, exact integers, response statuses,
-  disabled/old startup responses, schema mismatch, limits, rejected superseded credentials, and a
-  counter retained across same-process follow-ups but reset only for a new execution. There is no
+- **PRODUCT 2, 10, 13:** Wire tests compare semantic JSON against the common Claude/Codex POST
+  fixtures without floating-point conversion, including native attribution, zero versus missing,
+  counts above 2^53, omitted producer metadata, no request version, and harness/payload mismatch.
+  Transport tests cover response statuses, disabled/old startup responses, limits,
+  rejected superseded credentials, and a counter retained across same-process follow-ups but reset
+  only for a new execution. There is no
   same-execution recovery path. Reuse server auth tests rather than reimplementing token minting in Rust.
 - **Build:** run repository formatting and the Clippy configurations in `script/presubmit`, focused
   `cargo nextest` tests, and build the producer. Cover native macOS development plus Linux worker

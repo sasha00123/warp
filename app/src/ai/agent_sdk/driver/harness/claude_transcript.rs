@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::fs::{create_dir_all, write};
 #[cfg(test)]
 use std::io::BufRead;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -181,29 +181,33 @@ pub(super) fn read_envelope_with_diagnostics(
         .join(session_uuid.to_string())
         .join("subagents");
     match std::fs::read_dir(&subagents_dir) {
-        Ok(directory) => for entry in directory {
-            let Ok(entry) = entry else {
-                diagnostics.subagent_discovery_incomplete = true;
-                continue;
-            };
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
+        Ok(directory) => {
+            for entry in directory {
+                let Ok(entry) = entry else {
+                    diagnostics.subagent_discovery_incomplete = true;
+                    continue;
+                };
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    continue;
+                }
+                let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                    diagnostics.subagent_discovery_incomplete = true;
+                    continue;
+                };
+                let capture = read_jsonl_capture(&path).unwrap_or_else(|_| JsonlCapture {
+                    diagnostics: JsonlDiagnostics {
+                        status: JsonlReadStatus::Unreadable,
+                        ..Default::default()
+                    },
+                    entries: Vec::new(),
+                });
+                diagnostics
+                    .subagents
+                    .insert(stem.to_owned(), capture.diagnostics);
+                subagents.insert(stem.to_owned(), capture.entries);
             }
-            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
-                diagnostics.subagent_discovery_incomplete = true;
-                continue;
-            };
-            let capture = read_jsonl_capture(&path).unwrap_or_else(|_| JsonlCapture {
-                diagnostics: JsonlDiagnostics {
-                    status: JsonlReadStatus::Unreadable,
-                    ..Default::default()
-                },
-                entries: Vec::new(),
-            });
-            diagnostics.subagents.insert(stem.to_owned(), capture.diagnostics);
-            subagents.insert(stem.to_owned(), capture.entries);
-        },
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(_) => diagnostics.subagent_discovery_incomplete = true,
     }
@@ -239,14 +243,17 @@ pub(super) fn read_envelope_with_diagnostics(
         }
     }
 
-    Ok((ClaudeTranscriptEnvelope {
-        cwd: cwd.to_path_buf(),
-        uuid: session_uuid,
-        claude_version: None,
-        entries,
-        subagents,
-        todos,
-    }, diagnostics))
+    Ok((
+        ClaudeTranscriptEnvelope {
+            cwd: cwd.to_path_buf(),
+            uuid: session_uuid,
+            claude_version: None,
+            entries,
+            subagents,
+            todos,
+        },
+        diagnostics,
+    ))
 }
 
 /// Write a [`ClaudeTranscriptEnvelope`] back to disk using the same layout
