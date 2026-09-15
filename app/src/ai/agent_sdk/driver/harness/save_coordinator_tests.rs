@@ -13,12 +13,13 @@ use super::{
     SaveCoordinator, SaveOperation, remaining_final_save_budget, save_transcript_and_block,
 };
 use crate::ai::agent_sdk::driver::harness::SavePoint;
+
 #[tokio::test]
 async fn metrics_timeout_preserves_completed_persistence_and_drops_publication() {
     let coordinator = SaveCoordinator::default();
     let (release, released) = oneshot::channel::<()>();
     let result = coordinator
-        .finish(
+        .finalize(
             future::ready(Ok(())),
             async {
                 let _ = released.await;
@@ -30,7 +31,7 @@ async fn metrics_timeout_preserves_completed_persistence_and_drops_publication()
     assert!(release.send(()).is_err());
     assert!(
         coordinator
-            .finish(
+            .finalize(
                 future::pending::<Result<()>>(),
                 future::pending(),
                 Duration::from_secs(30),
@@ -61,11 +62,11 @@ async fn coalesces_saves_without_blocking_other_work() {
         })
     });
 
-    coordinator.request(SavePoint::Periodic, operation.clone(), &background);
+    coordinator.enqueue(SavePoint::Periodic, operation.clone(), &background);
     assert_eq!(starts.recv().await.unwrap(), SavePoint::Periodic);
-    coordinator.request(SavePoint::PostTurn, operation.clone(), &background);
-    coordinator.request(SavePoint::Periodic, operation.clone(), &background);
-    coordinator.request(SavePoint::PostTurn, operation, &background);
+    coordinator.enqueue(SavePoint::PostTurn, operation.clone(), &background);
+    coordinator.enqueue(SavePoint::Periodic, operation.clone(), &background);
+    coordinator.enqueue(SavePoint::PostTurn, operation, &background);
     let (ping, pong) = oneshot::channel();
     background
         .spawn(async move { ping.send(()).unwrap() })
@@ -80,7 +81,7 @@ async fn coalesces_saves_without_blocking_other_work() {
     assert_eq!(starts.recv().await.unwrap(), SavePoint::PostTurn);
     release.send(()).await.unwrap();
     coordinator
-        .finish(
+        .finalize(
             async {
                 saved.lock().push(SavePoint::Final);
                 Ok(())
@@ -140,6 +141,19 @@ async fn raw_failure_does_not_cancel_block_snapshot() {
 }
 
 #[tokio::test]
+async fn simultaneous_failures_preserve_both_errors() {
+    let error = save_transcript_and_block(
+        future::ready(Err(anyhow!("raw unavailable"))),
+        future::ready(Err(anyhow!("block unavailable"))),
+    )
+    .await
+    .unwrap_err();
+    let message = format!("{error:#}");
+    assert!(message.contains("raw unavailable"));
+    assert!(message.contains("block unavailable"));
+}
+
+#[tokio::test]
 async fn cancelled_blocking_capture_cannot_upload_after_final_save() {
     let background = Background::default();
     let coordinator = SaveCoordinator::default();
@@ -163,12 +177,12 @@ async fn cancelled_blocking_capture_cannot_upload_after_final_save() {
             Ok(())
         })
     });
-    coordinator.request(SavePoint::Periodic, operation.clone(), &background);
+    coordinator.enqueue(SavePoint::Periodic, operation.clone(), &background);
     start.await.unwrap();
-    coordinator.request(SavePoint::PostTurn, operation.clone(), &background);
+    coordinator.enqueue(SavePoint::PostTurn, operation.clone(), &background);
 
     coordinator
-        .finish(
+        .finalize(
             async {
                 uploaded.lock().push("final");
                 Ok(())
@@ -178,7 +192,7 @@ async fn cancelled_blocking_capture_cannot_upload_after_final_save() {
         )
         .await
         .unwrap();
-    coordinator.request(SavePoint::PostTurn, operation, &background);
+    coordinator.enqueue(SavePoint::PostTurn, operation, &background);
     release.send(()).unwrap();
     read_finished.await.unwrap();
 
@@ -191,7 +205,7 @@ async fn expired_final_deadline_never_starts_or_rearms_a_save() {
     let captured = AtomicBool::new(false);
     assert!(
         coordinator
-            .finish(
+            .finalize(
                 async {
                     captured.store(true, Ordering::SeqCst);
                     Ok(())
@@ -204,7 +218,7 @@ async fn expired_final_deadline_never_starts_or_rearms_a_save() {
     );
     assert!(
         coordinator
-            .finish(
+            .finalize(
                 async {
                     captured.store(true, Ordering::SeqCst);
                     Ok(())
@@ -225,7 +239,7 @@ async fn final_timeout_cancels_future_before_returning() {
     let uploaded = AtomicBool::new(false);
     assert!(
         coordinator
-            .finish(
+            .finalize(
                 async {
                     released.await?;
                     uploaded.store(true, Ordering::SeqCst);
@@ -256,11 +270,11 @@ async fn interrupted_finalizer_still_joins_the_cancelled_worker() {
             Ok(())
         })
     });
-    coordinator.request(SavePoint::Periodic, operation, &background);
+    coordinator.enqueue(SavePoint::Periodic, operation, &background);
     start.await.unwrap();
     assert!(
         coordinator
-            .finish(
+            .finalize(
                 future::pending::<Result<()>>(),
                 future::ready(()),
                 Duration::from_secs(5)
@@ -270,7 +284,7 @@ async fn interrupted_finalizer_still_joins_the_cancelled_worker() {
     );
 
     coordinator
-        .finish(
+        .finalize(
             async {
                 assert!(release.send(()).is_err());
                 Ok(())
@@ -286,7 +300,7 @@ async fn interrupted_finalizer_still_joins_the_cancelled_worker() {
 async fn final_failure_is_retained_without_repeating_writes() {
     let coordinator = SaveCoordinator::default();
     let result = coordinator
-        .finish(
+        .finalize(
             async { Err(anyhow!("upload failed")) },
             future::ready(()),
             Duration::from_secs(5),
@@ -295,7 +309,7 @@ async fn final_failure_is_retained_without_repeating_writes() {
     assert!(result.is_err());
     assert!(
         coordinator
-            .finish(
+            .finalize(
                 future::pending::<Result<()>>(),
                 future::ready(()),
                 Duration::from_secs(5)

@@ -1553,11 +1553,9 @@ impl AgentDriver {
                 {
                     // These interrupts drop run_harness before its ordinary final-save path.
                     Self::force_kill_harness(&foreground).await;
-                    report_if_error!(
-                        runner.finish_saves(&foreground).await.context(
-                            "Failed to save final harness conversation after interruption"
-                        )
-                    );
+                    if runner.finalize_saves(&foreground).await.is_err() {
+                        log::warn!("Harness final save after interruption failed");
+                    }
                     // TODO(vkodithala): Decide how runner cleanup fits within the remaining
                     // shutdown budget; force-killing skips bridge and resumption-state cleanup.
                 }
@@ -3232,9 +3230,9 @@ impl AgentDriver {
                     log::debug!("Triggering periodic save of harness conversation data");
                     report_if_error!(runner
                         .clone()
-                        .request_save(SavePoint::Periodic, foreground)
+                        .enqueue_save(SavePoint::Periodic, foreground)
                         .await
-                        .context("Failed to save harness conversation (periodic)"));
+                        .context("Failed to enqueue periodic harness conversation save"));
                 }
                 _ = harness_exit_rx => {
                     break Self::escalate_harness_exit(
@@ -3309,12 +3307,13 @@ impl AgentDriver {
 
         // Final save after the command finishes.
         log::debug!("Triggering final save of harness conversation data");
-        let final_save_result = runner
-            .finish_saves(foreground)
-            .await
-            .context("Failed to save final harness conversation");
-        let final_save_succeeded = final_save_result.is_ok();
-        report_if_error!(final_save_result);
+        let final_save_succeeded = match runner.finalize_saves(foreground).await {
+            Ok(()) => true,
+            Err(_) => {
+                log::warn!("Harness final conversation save failed");
+                false
+            }
+        };
         let cleanup_disposition = if final_save_succeeded
             && detected_runtime_failure.is_none()
             && matches!(command_result.as_ref(), Ok(exit_code) if exit_code.was_successful())
@@ -4300,9 +4299,9 @@ impl AgentDriver {
             async move {
                 report_if_error!(
                     runner
-                        .request_save(SavePoint::PostTurn, &foreground)
+                        .enqueue_save(SavePoint::PostTurn, &foreground)
                         .await
-                        .context("Failed to request harness conversation save")
+                        .context("Failed to enqueue harness conversation save")
                 );
             },
             |_, _, _| {},

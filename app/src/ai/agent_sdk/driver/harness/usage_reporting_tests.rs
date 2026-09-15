@@ -10,7 +10,11 @@ use serde_json::json;
 use warp_core::channel::ChannelState;
 use warp_harness_usage::{CaptureDiagnostics, JsonlDiagnostics, JsonlReadStatus, extract_claude};
 
+use super::super::transcript_persistence::{
+    CapturedTranscript, capture_transcript_with_retry, upload_captured_transcript,
+};
 use super::*;
+use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent_sdk::driver::harness::save_coordinator::save_transcript_and_block;
 use crate::server::server_api::ServerApiProvider;
 
@@ -33,8 +37,7 @@ fn report() -> HarnessUsageReport {
         execution_id: 41,
         sequence: 1,
     }
-    .report(
-        UsageHarness::ClaudeCode,
+    .build_usage_report(
         Utc.with_ymd_and_hms(2026, 9, 10, 12, 0, 0).unwrap(),
         extract_claude(
             "root",
@@ -50,31 +53,6 @@ fn report() -> HarnessUsageReport {
         ),
     )
     .unwrap()
-}
-
-#[test]
-fn capture_identity_does_not_publish_a_mismatched_payload() {
-    let outcome = extract_claude(
-        "root",
-        &[],
-        [],
-        &CaptureDiagnostics {
-            root: JsonlDiagnostics {
-                status: JsonlReadStatus::Readable,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-    );
-
-    assert!(
-        CaptureIdentity {
-            execution_id: 41,
-            sequence: 1
-        }
-        .report(UsageHarness::Codex, Utc::now(), outcome)
-        .is_none()
-    );
 }
 
 #[test]
@@ -179,22 +157,26 @@ fn raw_success_gates_reporting_independently_of_block_failure() {
         let reporter = reporter(client.clone());
         let conversation = ServerConversationToken::new("synthetic-conversation".to_owned());
         let persistence = block_on(save_transcript_and_block(
-            upload_capture(
-                &*client,
-                &conversation,
-                &reporter,
-                CapturedTranscript {
-                    body: b"{}".to_vec(),
-                    report: usable.then(report),
-                    needs_retry: false,
-                },
-            ),
+            async {
+                let report = upload_captured_transcript(
+                    &*client,
+                    &conversation,
+                    CapturedTranscript {
+                        transcript_body: b"{}".to_vec(),
+                        usage_report: usable.then(report),
+                        needs_retry: false,
+                    },
+                )
+                .await?;
+                reporter.stage_uploaded_report(report);
+                Ok(())
+            },
             future::ready(Err(anyhow!("block unavailable"))),
         ));
         assert!(persistence.is_err());
-        block_on(reporter.publish());
-        block_on(reporter.publish());
-        assert_eq!(reporter.disabled.load(Ordering::Relaxed), should_report);
+        block_on(reporter.publish_staged());
+        block_on(reporter.publish_staged());
+        assert_eq!(!reporter.is_enabled(), should_report);
         target.assert();
         raw.assert();
         metrics.assert();
@@ -204,17 +186,23 @@ fn raw_success_gates_reporting_independently_of_block_failure() {
 #[tokio::test]
 async fn a_later_read_error_preserves_the_last_usable_capture() {
     let mut original = Some(CapturedTranscript {
-        body: b"captured before failure".to_vec(),
-        report: Some(report()),
+        transcript_body: b"captured before failure".to_vec(),
+        usage_report: Some(report()),
         needs_retry: true,
     });
-    let captured = capture_with_retry(true, || {
-        future::ready(original.take().ok_or_else(|| anyhow!("read failed")))
+    let captured = capture_transcript_with_retry(true, || {
+        future::ready(
+            original
+                .take()
+                .map(Some)
+                .ok_or_else(|| anyhow!("read failed")),
+        )
     })
     .await
+    .unwrap()
     .unwrap();
-    assert_eq!(captured.body, b"captured before failure");
-    let retained = captured.report.unwrap();
+    assert_eq!(captured.transcript_body, b"captured before failure");
+    let retained = captured.usage_report.unwrap();
     assert_eq!(retained.capture_sequence, 1);
     assert_eq!(retained.captured_at, report().captured_at);
 }

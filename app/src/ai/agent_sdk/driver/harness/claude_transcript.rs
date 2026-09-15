@@ -17,9 +17,7 @@
 //! envelopes without pulling in the rest of the harness runner.
 use std::collections::HashMap;
 use std::fs::{create_dir_all, write};
-#[cfg(test)]
-use std::io::BufRead;
-use std::io::{BufReader, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -27,17 +25,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 use warp_core::safe_warn;
-use warp_harness_usage::{
-    CaptureDiagnostics, JsonlCapture, JsonlDiagnostics, JsonlReadStatus, parse_jsonl,
-};
+use warp_harness_usage::{CaptureDiagnostics, JsonlCapture, JsonlDiagnostics, JsonlReadStatus};
 
 use super::json_utils::entries_to_jsonl;
+use super::transcript_persistence::read_jsonl_capture;
 use crate::ai::agent::api::ServerConversationToken;
 
-/// JSON envelope sent to the server representing a complete Claude Code session.
+/// JSON envelope sent to the server for one captured Claude Code session.
 ///
-/// Bundles the main session transcript, any subagent transcripts, and
-/// per-agent TODO lists assembled from the Claude state directory.
+/// Valid records are retained when a native file is incomplete; capture diagnostics are not
+/// serialized into this raw transcript shape.
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct ClaudeTranscriptEnvelope {
     /// The directory that the Claude Code session started in.
@@ -114,37 +111,10 @@ pub(super) fn home_dir_for_claude_config() -> Option<PathBuf> {
     dirs::home_dir()
 }
 
-/// Assemble a [`ClaudeTranscriptEnvelope`] from the Claude config directory.
+/// Captures the session envelope and diagnostics from the same native reads.
 ///
-/// Reads:
-/// - `<config_root>/projects/<encoded_cwd>/<session_uuid>.jsonl` - main transcript
-/// - `<config_root>/projects/<encoded_cwd>/<session_uuid>/subagents/*.jsonl` - subagents
-/// - `<config_root>/todos/<session_uuid>-agent-*.json` - per-agent todo lists
-///
-/// If the main JSONL does not exist, `require_main_transcript` controls whether
-/// this returns an error or an envelope with an empty `entries` list.
-#[cfg(test)]
-pub(crate) fn read_envelope(
-    session_uuid: Uuid,
-    cwd: &Path,
-    config_root: &Path,
-    require_main_transcript: bool,
-) -> Result<ClaudeTranscriptEnvelope> {
-    read_envelope_with_diagnostics(session_uuid, cwd, config_root, require_main_transcript)
-        .map(|(envelope, _)| envelope)
-}
-
-pub(super) fn read_jsonl_capture(path: &Path) -> Result<JsonlCapture> {
-    match std::fs::File::open(path) {
-        Ok(file) => Ok(parse_jsonl(BufReader::new(file))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(JsonlCapture {
-            entries: Vec::new(),
-            diagnostics: JsonlDiagnostics::default(),
-        }),
-        Err(error) => Err(error).context("Failed to open native transcript"),
-    }
-}
-
+/// A required root must exist and contain a complete readable record. Usable partial root and
+/// subagent records are retained, while subagent discovery/read failures degrade diagnostics.
 pub(super) fn read_envelope_with_diagnostics(
     session_uuid: Uuid,
     cwd: &Path,
@@ -157,17 +127,17 @@ pub(super) fn read_envelope_with_diagnostics(
     // Main session transcript.
     let session_file = projects_dir.join(format!("{session_uuid}.jsonl"));
     let root = read_jsonl_capture(&session_file)?;
-    if root.diagnostics.status == JsonlReadStatus::Unreadable && root.entries.is_empty() {
-        anyhow::bail!("Native root transcript could not be read");
-    }
-    if require_main_transcript && root.entries.is_empty() && !root.diagnostics.is_complete() {
-        anyhow::bail!("Native root transcript has no complete readable records");
-    }
     if require_main_transcript && root.diagnostics.status == JsonlReadStatus::Missing {
         anyhow::bail!(
             "Claude Code transcript does not exist after harness termination: {}",
             session_file.display()
         );
+    }
+    if root.diagnostics.status == JsonlReadStatus::Unreadable && root.entries.is_empty() {
+        anyhow::bail!("Native root transcript could not be read");
+    }
+    if require_main_transcript && root.entries.is_empty() {
+        anyhow::bail!("Native root transcript has no complete readable records");
     }
     let entries = root.entries;
     let mut diagnostics = CaptureDiagnostics {
@@ -487,42 +457,6 @@ pub(crate) fn write_session_index_entry(
     )
     .with_context(|| format!("Failed to write {}", index_path.display()))?;
     Ok(())
-}
-
-/// Read a JSONL file, returning one parsed [`Value`] per non-blank line.
-///
-/// Lines that fail to parse as JSON are skipped with a warning rather than
-/// causing the entire read to fail. A missing file returns an empty [`Vec`].
-#[cfg(test)]
-pub(crate) fn read_jsonl(path: &Path) -> Result<Vec<Value>> {
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => {
-            return Err(
-                anyhow::Error::from(e).context(format!("Failed to open {}", path.display()))
-            );
-        }
-    };
-    let reader = BufReader::new(file);
-    let mut entries = Vec::new();
-    for line in reader.lines() {
-        let line = line.with_context(|| format!("Failed to read line from {}", path.display()))?;
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        match serde_json::from_str(trimmed) {
-            Ok(value) => entries.push(value),
-            Err(e) => {
-                safe_warn!(
-                    safe: ("Skipping malformed JSONL entry"),
-                    full: ("Skipping malformed JSONL entry in {}: {e}", path.display())
-                );
-            }
-        }
-    }
-    Ok(entries)
 }
 
 #[cfg(test)]

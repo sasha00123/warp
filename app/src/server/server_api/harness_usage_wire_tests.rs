@@ -7,14 +7,20 @@ use warp_harness_usage::{
     NativePayload, ReasonCode, ToolCalls, UsagePayload, UsageSnapshot,
 };
 
-use super::{HarnessUsageReport, MAX_BODY_BYTES, UsageHarness};
+use super::{HarnessUsageReport, MAX_BODY_BYTES};
 
 const CLAUDE_FIXTURE: &str = include_str!("testdata/harness_usage/claude.json");
 const CODEX_FIXTURE: &str = include_str!("testdata/harness_usage/codex.json");
 
-fn snapshot(harness: UsageHarness) -> UsageSnapshot {
+#[derive(Clone, Copy, Debug)]
+enum TestHarness {
+    ClaudeCode,
+    Codex,
+}
+
+fn snapshot(harness: TestHarness) -> UsageSnapshot {
     let payload = match harness {
-        UsageHarness::ClaudeCode => NativePayload::Claude(UsagePayload {
+        TestHarness::ClaudeCode => NativePayload::Claude(UsagePayload {
             usage: Some(ClaudeUsage {
                 input_tokens: Some(9_007_199_254_740_993),
                 output_tokens: Some(0),
@@ -45,7 +51,7 @@ fn snapshot(harness: UsageHarness) -> UsageSnapshot {
                 by_name: BTreeMap::from([("Read".into(), 1), ("mcp__test__lookup".into(), 1)]),
             }),
         }),
-        UsageHarness::Codex => NativePayload::Codex(UsagePayload {
+        TestHarness::Codex => NativePayload::Codex(UsagePayload {
             usage: Some(CodexUsage {
                 input_tokens: Some(10),
                 cached_input_tokens: Some(0),
@@ -78,8 +84,8 @@ fn snapshot(harness: UsageHarness) -> UsageSnapshot {
         payload,
         coverage: Coverage {
             token_status: match harness {
-                UsageHarness::ClaudeCode => CoverageStatus::Known,
-                UsageHarness::Codex => CoverageStatus::Partial,
+                TestHarness::ClaudeCode => CoverageStatus::Known,
+                TestHarness::Codex => CoverageStatus::Partial,
             },
             tool_status: CoverageStatus::Known,
             captured_scope: "producer-local-scope",
@@ -91,24 +97,22 @@ fn snapshot(harness: UsageHarness) -> UsageSnapshot {
     }
 }
 
-fn report(harness: UsageHarness, snapshot: &UsageSnapshot) -> HarnessUsageReport {
+fn report(snapshot: &UsageSnapshot) -> HarnessUsageReport {
     HarnessUsageReport::new(
-        harness,
         7,
         3,
         Utc.with_ymd_and_hms(2026, 1, 1, 12, 0, 0).unwrap(),
         snapshot,
     )
-    .unwrap()
 }
 
 #[test]
 fn wire_matches_shared_fixtures_without_producer_metadata() {
     for (harness, fixture) in [
-        (UsageHarness::ClaudeCode, CLAUDE_FIXTURE),
-        (UsageHarness::Codex, CODEX_FIXTURE),
+        (TestHarness::ClaudeCode, CLAUDE_FIXTURE),
+        (TestHarness::Codex, CODEX_FIXTURE),
     ] {
-        let body = report(harness, &snapshot(harness)).encode().unwrap();
+        let body = report(&snapshot(harness)).encode().unwrap();
         let actual: Value = serde_json::from_slice(&body).unwrap();
         let expected: Value = serde_json::from_str(fixture).unwrap();
 
@@ -118,7 +122,7 @@ fn wire_matches_shared_fixtures_without_producer_metadata() {
 
 #[test]
 fn preserves_remaining_optional_native_fields() {
-    let mut claude = snapshot(UsageHarness::ClaudeCode);
+    let mut claude = snapshot(TestHarness::ClaudeCode);
     let NativePayload::Claude(payload) = &mut claude.payload else {
         unreachable!()
     };
@@ -126,19 +130,19 @@ fn preserves_remaining_optional_native_fields() {
         ephemeral_5m_input_tokens: None,
         ephemeral_1h_input_tokens: Some(i64::MAX),
     });
-    let actual = serde_json::to_value(report(UsageHarness::ClaudeCode, &claude)).unwrap();
+    let actual = serde_json::to_value(report(&claude)).unwrap();
     assert_eq!(
         actual["snapshot"]["payload"]["usage"]["cache_creation"],
         json!({"ephemeral_1h_input_tokens": i64::MAX})
     );
 
-    let mut codex = snapshot(UsageHarness::Codex);
+    let mut codex = snapshot(TestHarness::Codex);
     let NativePayload::Codex(payload) = &mut codex.payload else {
         unreachable!()
     };
     payload.attribution[0].attribution.inference_geo = Some("us".into());
     payload.attribution[0].attribution.speed = Some("fast".into());
-    let actual = serde_json::to_value(report(UsageHarness::Codex, &codex)).unwrap();
+    let actual = serde_json::to_value(report(&codex)).unwrap();
     assert_eq!(
         actual["snapshot"]["payload"]["attribution"][0],
         json!({
@@ -153,7 +157,7 @@ fn preserves_remaining_optional_native_fields() {
 
 #[test]
 fn missing_categories_are_not_measured_zero() {
-    let mut snapshot = snapshot(UsageHarness::Codex);
+    let mut snapshot = snapshot(TestHarness::Codex);
     let NativePayload::Codex(payload) = &mut snapshot.payload else {
         unreachable!()
     };
@@ -161,7 +165,7 @@ fn missing_categories_are_not_measured_zero() {
     payload.attribution.clear();
     snapshot.coverage.token_status = CoverageStatus::Unavailable;
 
-    let actual = serde_json::to_value(report(UsageHarness::Codex, &snapshot)).unwrap();
+    let actual = serde_json::to_value(report(&snapshot)).unwrap();
     assert_eq!(
         actual["snapshot"],
         json!({
@@ -183,7 +187,7 @@ fn missing_categories_are_not_measured_zero() {
     });
     snapshot.coverage.token_status = CoverageStatus::Partial;
     snapshot.coverage.tool_status = CoverageStatus::Unavailable;
-    let actual = serde_json::to_value(report(UsageHarness::Codex, &snapshot)).unwrap();
+    let actual = serde_json::to_value(report(&snapshot)).unwrap();
     assert_eq!(
         actual["snapshot"]["payload"],
         json!({"usage": {"output_tokens": 0}})
@@ -191,23 +195,11 @@ fn missing_categories_are_not_measured_zero() {
 }
 
 #[test]
-fn mismatched_harness_payloads_cannot_construct_a_report() {
-    for (harness, other) in [
-        (UsageHarness::ClaudeCode, UsageHarness::Codex),
-        (UsageHarness::Codex, UsageHarness::ClaudeCode),
-    ] {
-        assert!(HarnessUsageReport::new(harness, 7, 3, Utc::now(), &snapshot(other),).is_err());
-    }
-}
-
-#[test]
 fn unusable_and_oversized_reports_are_rejected() {
-    let mut snapshot = snapshot(UsageHarness::ClaudeCode);
+    let mut snapshot = snapshot(TestHarness::ClaudeCode);
     snapshot.coverage.token_status = CoverageStatus::Unavailable;
     snapshot.coverage.tool_status = CoverageStatus::Unavailable;
-    assert!(
-        HarnessUsageReport::new(UsageHarness::ClaudeCode, 7, 3, Utc::now(), &snapshot).is_err()
-    );
+    assert!(report(&snapshot).encode().is_err());
 
     snapshot.coverage.tool_status = CoverageStatus::Known;
     let NativePayload::Claude(payload) = &mut snapshot.payload else {
@@ -215,9 +207,5 @@ fn unusable_and_oversized_reports_are_rejected() {
     };
     payload.tool_calls.as_mut().unwrap().by_name =
         BTreeMap::from([("a".repeat(MAX_BODY_BYTES), 2)]);
-    assert!(
-        report(UsageHarness::ClaudeCode, &snapshot)
-            .encode()
-            .is_err()
-    );
+    assert!(report(&snapshot).encode().is_err());
 }

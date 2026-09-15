@@ -15,17 +15,16 @@ use warp_server_client::base_client::{AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT
 
 use super::{
     HarnessUsageContext, HarnessUsageError, HarnessUsageErrorKind, HarnessUsagePublicationStatus,
-    HarnessUsageReport, ResolvedHarnessPrompt, ServerApi, UsageHarness,
-    parse_harness_usage_retry_after,
+    HarnessUsageReport, ResolvedHarnessPrompt, ServerApi, parse_harness_usage_retry_after,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+
 fn task_id() -> AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440000".parse().unwrap()
 }
 
 fn report() -> HarnessUsageReport {
     HarnessUsageReport::new(
-        UsageHarness::ClaudeCode,
         41,
         7,
         Utc.with_ymd_and_hms(2026, 9, 10, 12, 0, 0).unwrap(),
@@ -55,7 +54,6 @@ fn report() -> HarnessUsageReport {
             subagent_scope: vec!["child".into()],
         },
     )
-    .unwrap()
 }
 
 #[test]
@@ -98,7 +96,7 @@ fn invalid_reports_are_rejected_before_auth_or_network() {
         report.capture_sequence = capture_sequence;
 
         let error =
-            block_on(ServerApi::new_for_test().report_harness_usage_for_task(&task_id(), &report))
+            block_on(ServerApi::new_for_test().publish_harness_usage_for_task(&task_id(), &report))
                 .unwrap_err();
 
         assert_eq!(error.kind, HarnessUsageErrorKind::InvalidReport);
@@ -143,10 +141,10 @@ fn publication_reuses_workload_auth_but_not_an_unrelated_ambient_task() {
         ));
         server
             .base_client
-            .set_ambient_workload_token_for_test("synthetic-workload-token".into());
+            .set_ambient_workload_token_for_test("synthetic-workload-token".into(), None);
 
         let publication =
-            block_on(server.report_harness_usage_for_task(&task_id, &report)).unwrap();
+            block_on(server.publish_harness_usage_for_task(&task_id, &report)).unwrap();
 
         assert_eq!(publication.status, expected_status);
         assert_eq!(report.execution_id, 41);
@@ -205,7 +203,7 @@ fn publication_preserves_http_failure_classification() {
         let server = ServerApi::new_for_test();
 
         let error =
-            block_on(server.report_harness_usage_for_task(&task_id(), &report())).unwrap_err();
+            block_on(server.publish_harness_usage_for_task(&task_id(), &report())).unwrap_err();
 
         assert_eq!(error.kind, expected_kind, "{status} {problem_type}");
         assert_eq!(
@@ -235,9 +233,10 @@ fn retry_after_http_date_uses_response_time_not_capture_time() {
 }
 
 #[test]
-fn authentication_errors_never_retain_credential_diagnostics() {
-    let error = HarnessUsageError::from_auth_error(anyhow::anyhow!("private diagnostic"));
+fn request_preparation_errors_are_retryable_without_retaining_diagnostics() {
+    let error =
+        HarnessUsageError::from_request_preparation_error(anyhow::anyhow!("private diagnostic"));
 
-    assert_eq!(error.kind, HarnessUsageErrorKind::Unauthorized);
+    assert_eq!(error.kind, HarnessUsageErrorKind::Retryable);
     assert!(!format!("{error:?}").contains("private diagnostic"));
 }

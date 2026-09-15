@@ -54,7 +54,7 @@ impl SaveCoordinator {
     /// Starts a runner-scoped worker or coalesces this save point into its pending work.
     // TODO(vkodithala): Separate request coalescing from worker startup so this only accepts a
     // SavePoint.
-    pub(super) fn request(
+    pub(super) fn enqueue(
         &self,
         save_point: SavePoint,
         worker_operation: SaveOperation,
@@ -108,7 +108,7 @@ impl SaveCoordinator {
     }
 
     /// Stops ordinary requests, then drains or cancels current work before a bounded final save.
-    pub(super) async fn finish(
+    pub(super) async fn finalize(
         &self,
         final_save: impl Future<Output = Result<()>>,
         report_usage: impl Future<Output = ()>,
@@ -185,7 +185,15 @@ pub(super) async fn save_transcript_and_block(
     block: impl Future<Output = Result<()>>,
 ) -> Result<()> {
     let (transcript, block) = futures::join!(transcript, block);
-    transcript.and(block)
+    match (transcript, block) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error.context("Harness transcript save failed")),
+        (Ok(()), Err(error)) => Err(error.context("Harness block snapshot save failed")),
+        (Err(transcript), Err(block)) => Err(anyhow!(
+            "Harness transcript and block snapshot saves failed: \
+             transcript={transcript:#}; block={block:#}"
+        )),
+    }
 }
 
 #[cfg(test)]

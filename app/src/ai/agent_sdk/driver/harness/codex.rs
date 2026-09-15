@@ -22,17 +22,17 @@ use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
-use super::claude_transcript::read_jsonl_capture;
 use super::codex_transcript::{
     CodexResumeInfo, CodexTranscriptEnvelope, codex_sessions_root, find_session_file,
     parse_session_meta, rehydrate_codex_transcript,
 };
 use super::json_utils::read_json_file_or_default;
 use super::save_coordinator::{SaveCoordinator, save_transcript_and_block};
-use super::usage_reporting::{
-    CapturedTranscript, UsageReporter, backoff, capture_with_retry, needs_capture_retry,
-    upload_capture, wait_before_retry,
+use super::transcript_persistence::{
+    CapturedTranscript, capture_transcript_with_retry, needs_capture_retry, read_jsonl_capture,
+    upload_captured_transcript,
 };
+use super::usage_reporting::{CaptureIdentity, UsageReporter};
 use super::{
     HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
 };
@@ -44,7 +44,7 @@ use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::ai::ambient_agents::task::HarnessModelConfig;
 use crate::ai::mcp::JSONTransportType;
 use crate::server::server_api::ServerApi;
-use crate::server::server_api::harness_support::{HarnessSupportClient, UsageHarness};
+use crate::server::server_api::harness_support::HarnessSupportClient;
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::model::block::BlockId;
@@ -296,22 +296,64 @@ impl CodexHarnessRunner {
         })
     }
 
-    /// Return the filepath for the session transcript, walking the codex sessions tree to find it on the
-    /// first save call.
-    async fn resolve_transcript_path(&self) -> Option<PathBuf> {
+    /// Resolve and cache the current rollout path when Codex has created it.
+    async fn resolve_transcript_path(&self) -> Result<Option<PathBuf>> {
         if let Some(cached) = self.transcript_path.get() {
-            return Some(cached.clone());
+            return Ok(Some(cached.clone()));
         }
-        let session_id = self.session_id.get().copied()?;
-        let resolved = tokio::task::spawn_blocking(move || -> Option<PathBuf> {
-            let root = codex_sessions_root().ok()?;
-            find_session_file(&root, session_id)
+        let Some(session_id) = self.session_id.get().copied() else {
+            return Ok(None);
+        };
+        let root = codex_sessions_root().context("Failed to resolve Codex sessions root")?;
+        let resolved = tokio::task::spawn_blocking(move || find_session_file(&root, session_id))
+            .await
+            .context("Codex transcript discovery task failed")?;
+        if let Some(resolved) = &resolved {
+            let _ = self.transcript_path.set(resolved.clone());
+        }
+        Ok(resolved)
+    }
+
+    /// Capture and persist the Codex rollout when its session and path are available.
+    async fn capture_and_upload_transcript(
+        &self,
+        client: &dyn HarnessSupportClient,
+        conversation_id: &ServerConversationToken,
+        is_final: bool,
+        foreground: &ModelSpawner<AgentDriver>,
+    ) -> Result<()> {
+        let capture = capture_transcript_with_retry(self.usage.is_enabled(), || async {
+            self.handle_session_update(foreground).await?;
+            let Some(session_id) = self.session_id.get().copied() else {
+                return Ok(None);
+            };
+            let Some(transcript_path) = self.resolve_transcript_path().await? else {
+                return Ok(None);
+            };
+            let identity = self.usage.begin_capture();
+            tokio::task::spawn_blocking(move || {
+                capture_transcript_with_usage(session_id, &transcript_path, is_final, identity)
+            })
+            .await
+            .context("Native transcript capture task failed")?
+            .map(Some)
         })
-        .await
-        .ok()
-        .flatten()?;
-        let _ = self.transcript_path.set(resolved.clone());
-        Some(resolved)
+        .await?;
+        let Some(capture) = capture else {
+            if is_final {
+                log::warn!(
+                    "Codex session or rollout still unavailable at final save; \
+                     transcript was never uploaded"
+                );
+            } else {
+                log::debug!("Codex session or rollout not yet available");
+            }
+            return Ok(());
+        };
+        log::info!("Uploading Codex transcript to conversation {conversation_id}");
+        let report = upload_captured_transcript(client, conversation_id, capture).await?;
+        self.usage.stage_uploaded_report(report);
+        Ok(())
     }
 }
 
@@ -464,30 +506,11 @@ impl HarnessRunner for CodexHarnessRunner {
             } => (conversation_id.clone(), block_id.clone()),
         };
 
-        let mut rollout_path = self.resolve_transcript_path().await;
-        if self.usage.is_enabled() {
-            for attempt in 1..3 {
-                if rollout_path.is_some() {
-                    break;
-                }
-                wait_before_retry(backoff(attempt)).await;
-                let _ = self.handle_session_update(foreground).await;
-                rollout_path = self.resolve_transcript_path().await;
-            }
-        }
-        let session_id = self.session_id.get().copied();
         let client = self.client.as_ref();
 
         let is_final = matches!(save_point, SavePoint::Final);
         save_transcript_and_block(
-            upload_transcript(
-                client,
-                &conversation_id,
-                session_id,
-                rollout_path,
-                is_final,
-                &self.usage,
-            ),
+            self.capture_and_upload_transcript(client, &conversation_id, is_final, foreground),
             super::upload_current_block_snapshot(
                 foreground,
                 &self.terminal_driver,
@@ -500,88 +523,42 @@ impl HarnessRunner for CodexHarnessRunner {
     }
 }
 
-/// Upload the codex session transcript to the server. No-ops if the session UUID hasn't
-/// been captured yet or no rollout file is on disk yet.
-async fn upload_transcript(
-    client: &dyn HarnessSupportClient,
-    conversation_id: &ServerConversationToken,
-    session_id: Option<Uuid>,
-    transcript_path: Option<PathBuf>,
+fn capture_transcript_with_usage(
+    session_id: Uuid,
+    transcript_path: &Path,
     is_final: bool,
-    reporter: &UsageReporter,
-) -> Result<()> {
-    let Some(session_id) = session_id else {
-        if is_final {
-            log::warn!(
-                "Codex session id still unknown at final save; transcript was never uploaded"
-            );
-        } else {
-            log::debug!("Codex session id not yet known; skipping transcript upload");
-        }
-        return Ok(());
+    identity: Option<CaptureIdentity>,
+) -> Result<CapturedTranscript> {
+    let captured_at = Utc::now();
+    let capture = read_jsonl_capture(transcript_path)?;
+    if (is_final || identity.is_some()) && capture.diagnostics.status == JsonlReadStatus::Missing {
+        anyhow::bail!("Codex transcript disappeared before final save");
+    }
+    if capture.diagnostics.status == JsonlReadStatus::Unreadable && capture.entries.is_empty() {
+        anyhow::bail!("Codex transcript could not be read");
+    }
+    if identity.is_some() && capture.entries.is_empty() && !capture.diagnostics.is_complete() {
+        anyhow::bail!("Codex transcript has no complete readable records");
+    }
+    let metadata = parse_session_meta(capture.entries.first()).unwrap_or_default();
+    let envelope = CodexTranscriptEnvelope::new(session_id, metadata, capture.entries);
+    let transcript_body =
+        serde_json::to_vec(&envelope).context("Failed to serialize codex transcript")?;
+    let diagnostics = CaptureDiagnostics {
+        root: capture.diagnostics,
+        ..Default::default()
     };
-    let Some(transcript_path) = transcript_path else {
-        if is_final {
-            log::warn!(
-                "No codex rollout file found at final save for session {session_id}; transcript was never uploaded"
-            );
-        } else {
-            log::debug!("No codex rollout file yet for session {session_id}");
-        }
-        return Ok(());
-    };
-    log::info!("Uploading codex transcript to conversation {conversation_id}");
-
-    let capture = capture_with_retry(reporter.is_enabled(), || {
-        let identity = reporter.begin_capture();
-        let transcript_path = transcript_path.clone();
-        async move {
-            tokio::task::spawn_blocking(move || -> Result<CapturedTranscript> {
-                let captured_at = Utc::now();
-                let capture = read_jsonl_capture(&transcript_path)?;
-                if (is_final || identity.is_some())
-                    && capture.diagnostics.status == JsonlReadStatus::Missing
-                {
-                    anyhow::bail!("Codex transcript disappeared before final save");
-                }
-                if capture.diagnostics.status == JsonlReadStatus::Unreadable
-                    && capture.entries.is_empty()
-                {
-                    anyhow::bail!("Codex transcript could not be read");
-                }
-                if identity.is_some()
-                    && capture.entries.is_empty()
-                    && !capture.diagnostics.is_complete()
-                {
-                    anyhow::bail!("Codex transcript has no complete readable records");
-                }
-                let metadata = parse_session_meta(capture.entries.first()).unwrap_or_default();
-                let envelope = CodexTranscriptEnvelope::new(session_id, metadata, capture.entries);
-                let body = serde_json::to_vec(&envelope)
-                    .context("Failed to serialize codex transcript")?;
-                let diagnostics = CaptureDiagnostics {
-                    root: capture.diagnostics,
-                    ..Default::default()
-                };
-                let report = identity.and_then(|identity| {
-                    identity.report(
-                        UsageHarness::Codex,
-                        captured_at,
-                        extract_codex(&session_id.to_string(), &envelope.entries, &diagnostics),
-                    )
-                });
-                Ok(CapturedTranscript {
-                    body,
-                    report,
-                    needs_retry: needs_capture_retry(&diagnostics),
-                })
-            })
-            .await
-            .context("Native transcript capture task failed")?
-        }
+    let usage_report = identity.and_then(|identity| {
+        identity.build_usage_report(
+            captured_at,
+            extract_codex(&session_id.to_string(), &envelope.entries, &diagnostics),
+        )
+    });
+    Ok(CapturedTranscript {
+        transcript_body,
+        usage_report,
+        needs_retry: needs_capture_retry(&diagnostics),
     })
-    .await?;
-    upload_capture(client, conversation_id, reporter, capture).await
 }
 
 const CODEX_CONFIG_DIR: &str = ".codex";

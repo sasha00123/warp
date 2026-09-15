@@ -50,6 +50,7 @@ pub(crate) mod process_control;
 mod save_coordinator;
 mod skill_dirs_publish;
 mod telemetry;
+mod transcript_persistence;
 mod usage_reporting;
 pub(crate) use claude_code::ClaudeHarness;
 use claude_transcript::ClaudeResumeInfo;
@@ -493,7 +494,7 @@ pub(crate) fn harness_model_env_vars(
 pub(crate) enum SavePoint {
     /// A periodic auto-save to minimize data loss.
     Periodic,
-    /// The final save of conversation state, after the harness has completed.
+    /// The closing save after graceful or forced harness termination.
     Final,
     /// A save after session activity such as prompt submission or completed tool use.
     PostTurn,
@@ -547,14 +548,14 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
         None
     }
 
-    async fn publish_usage(&self) {
+    async fn publish_staged_usage(&self) {
         if let Some(reporter) = self.usage_reporter() {
-            reporter.publish().await;
+            reporter.publish_staged().await;
         }
     }
 
     /// Queues a save without waiting for persistence; overlapping requests are coalesced.
-    async fn request_save(
+    async fn enqueue_save(
         self: Arc<Self>,
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
@@ -563,7 +564,7 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
         let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
         let runner = self.clone();
         let foreground = foreground.clone();
-        coordinator.request(
+        coordinator.enqueue(
             save_point,
             Arc::new(move |save_point| {
                 let runner = runner.clone();
@@ -578,7 +579,7 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
                         );
                     }
                     let persistence = runner.save_conversation(save_point, &foreground).await;
-                    runner.publish_usage().await;
+                    runner.publish_staged_usage().await;
                     persistence
                 })
             }),
@@ -587,10 +588,10 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
         Ok(())
     }
 
-    /// Stops ordinary requests and runs one final save within the remaining shutdown budget.
-    async fn finish_saves(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
+    /// Finalizes persistence within one deadline; staged usage does not determine its result.
+    async fn finalize_saves(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
         self.save_coordinator()
-            .finish(
+            .finalize(
                 async {
                     report_if_error!(
                         self.handle_session_update(foreground)
@@ -599,7 +600,7 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
                     );
                     self.save_conversation(SavePoint::Final, foreground).await
                 },
-                self.publish_usage(),
+                self.publish_staged_usage(),
                 final_save_budget(),
             )
             .await
