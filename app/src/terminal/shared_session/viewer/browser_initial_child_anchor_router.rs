@@ -7,7 +7,7 @@ use warpui::{Entity, ModelContext, SingletonEntity, WeakViewHandle};
 #[cfg(target_family = "wasm")]
 use super::orchestration_viewer_model::{OrchestrationViewerModel, OrchestrationViewerModelEvent};
 use crate::ai::agent::conversation::AIConversationId;
-#[cfg(target_family = "wasm")]
+#[cfg(any(target_family = "wasm", test))]
 use crate::ai::ambient_agents::AmbientAgentTask;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 #[cfg(target_family = "wasm")]
@@ -24,7 +24,7 @@ use crate::uri::viewer_location::{
     ChildAnchor, HydratedAnchorAction, hydrated_anchor_action, is_expected_direct_child,
 };
 
-#[cfg(target_family = "wasm")]
+#[cfg(any(target_family = "wasm", test))]
 pub(crate) enum BrowserInitialChildAnchorRouterEvent {
     VerifiedChildFetched { task: AmbientAgentTask },
 }
@@ -42,9 +42,9 @@ pub(crate) struct BrowserInitialChildAnchorRouter {
 }
 
 impl Entity for BrowserInitialChildAnchorRouter {
-    #[cfg(target_family = "wasm")]
+    #[cfg(any(target_family = "wasm", test))]
     type Event = BrowserInitialChildAnchorRouterEvent;
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(not(any(target_family = "wasm", test)))]
     type Event = ();
 }
 
@@ -115,6 +115,15 @@ impl BrowserInitialChildAnchorRouter {
             initial_anchor_fetch_in_flight: false,
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(
+        parent_task_id: AmbientAgentTaskId,
+        terminal_view: WeakViewHandle<TerminalView>,
+        initial_child_anchor: ChildAnchor,
+    ) -> Self {
+        Self::new_with_anchor(parent_task_id, terminal_view, initial_child_anchor)
+    }
     pub(crate) fn child_registered(
         &mut self,
         task_id: AmbientAgentTaskId,
@@ -179,31 +188,52 @@ impl BrowserInitialChildAnchorRouter {
         ctx.spawn(
             async move { ai_client.get_ambient_agent_task(&task_id).await },
             move |router, result, ctx| {
-                router.initial_anchor_fetch_in_flight = false;
-                match result {
-                    Ok(task)
-                        if task.task_id == task_id
-                            && is_expected_direct_child(&task, task_id, parent_task_id) =>
-                    {
-                        #[cfg(target_family = "wasm")]
-                        if let Some(model) = router.verified_child_viewer_model.clone() {
-                            model.update(ctx, |model, ctx| {
-                                model.register_child(task, ctx);
-                            });
-                        } else {
-                            ctx.emit(BrowserInitialChildAnchorRouterEvent::VerifiedChildFetched {
-                                task,
-                            });
-                        }
-                        #[cfg(not(target_family = "wasm"))]
-                        let _ = task;
-                    }
-                    Ok(_) | Err(_) => {
-                        router.finish_initial_anchor_resolution(None, ctx);
-                    }
-                }
+                router.handle_initial_anchor_fetch_result(task_id, parent_task_id, result, ctx);
             },
         );
+    }
+
+    fn handle_initial_anchor_fetch_result(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        parent_task_id: AmbientAgentTaskId,
+        result: anyhow::Result<AmbientAgentTask>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.initial_anchor_fetch_in_flight = false;
+        match result {
+            Ok(task)
+                if task.task_id == task_id
+                    && is_expected_direct_child(&task, task_id, parent_task_id) =>
+            {
+                #[cfg(target_family = "wasm")]
+                if let Some(model) = self.verified_child_viewer_model.clone() {
+                    model.update(ctx, |model, ctx| {
+                        model.register_child(task, ctx);
+                    });
+                } else {
+                    ctx.emit(BrowserInitialChildAnchorRouterEvent::VerifiedChildFetched { task });
+                }
+                #[cfg(all(test, not(target_family = "wasm")))]
+                ctx.emit(BrowserInitialChildAnchorRouterEvent::VerifiedChildFetched { task });
+                #[cfg(not(any(target_family = "wasm", test)))]
+                let _ = task;
+            }
+            Ok(_) | Err(_) => {
+                self.finish_initial_anchor_resolution(None, ctx);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn complete_initial_anchor_fetch_for_test(
+        &mut self,
+        task: AmbientAgentTask,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.seeded_child_ids = Some(HashSet::new());
+        self.initial_anchor_fetch_in_flight = true;
+        self.handle_initial_anchor_fetch_result(task.task_id, self.parent_task_id, Ok(task), ctx);
     }
 
     fn finish_initial_anchor_resolution(
