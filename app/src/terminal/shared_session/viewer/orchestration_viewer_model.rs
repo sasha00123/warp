@@ -71,7 +71,7 @@ pub(crate) struct OrchestrationViewerModel {
     #[cfg(test)]
     metadata_fetch_dispatch_count: usize,
 }
-#[cfg(any(target_family = "wasm", test))]
+#[cfg(target_family = "wasm")]
 pub(crate) enum OrchestrationViewerModelEvent {
     ChildRegistered {
         task_id: AmbientAgentTaskId,
@@ -80,9 +80,9 @@ pub(crate) enum OrchestrationViewerModelEvent {
 }
 
 impl Entity for OrchestrationViewerModel {
-    #[cfg(any(target_family = "wasm", test))]
+    #[cfg(target_family = "wasm")]
     type Event = OrchestrationViewerModelEvent;
-    #[cfg(not(any(target_family = "wasm", test)))]
+    #[cfg(not(target_family = "wasm"))]
     type Event = ();
 }
 
@@ -92,7 +92,7 @@ impl OrchestrationViewerModel {
         self.parent_task_id
     }
 
-    #[cfg(any(target_family = "wasm", test))]
+    #[cfg(target_family = "wasm")]
     pub(super) fn registered_children(&self) -> HashMap<AmbientAgentTaskId, AIConversationId> {
         self.children
             .iter()
@@ -420,7 +420,7 @@ impl OrchestrationViewerModel {
                 entry.pane_materialization_requested = true;
                 self.request_child_pane_materialization(conversation_id, task, ctx);
             }
-            #[cfg(any(target_family = "wasm", test))]
+            #[cfg(target_family = "wasm")]
             {
                 ctx.emit(OrchestrationViewerModelEvent::ChildRegistered {
                     task_id,
@@ -527,7 +527,7 @@ impl OrchestrationViewerModel {
 
         // Arm the session_id refetch timer if the child arrived pre-claim.
         self.maybe_schedule_pending_session_id_poll(ctx);
-        #[cfg(any(target_family = "wasm", test))]
+        #[cfg(target_family = "wasm")]
         {
             ctx.emit(OrchestrationViewerModelEvent::ChildRegistered {
                 task_id,

@@ -1,10 +1,16 @@
 use std::collections::{HashMap, HashSet};
 
-use warpui::{Entity, ModelContext, ModelHandle, SingletonEntity, WeakViewHandle};
+#[cfg(target_family = "wasm")]
+use warpui::ModelHandle;
+use warpui::{Entity, ModelContext, SingletonEntity, WeakViewHandle};
 
+#[cfg(target_family = "wasm")]
 use super::orchestration_viewer_model::{OrchestrationViewerModel, OrchestrationViewerModelEvent};
 use crate::ai::agent::conversation::AIConversationId;
+#[cfg(target_family = "wasm")]
+use crate::ai::ambient_agents::AmbientAgentTask;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+#[cfg(target_family = "wasm")]
 use crate::ai::blocklist::orchestration_event_streamer::{
     OrchestrationEventStreamer, OrchestrationEventStreamerEvent,
 };
@@ -18,10 +24,16 @@ use crate::uri::viewer_location::{
     ChildAnchor, HydratedAnchorAction, hydrated_anchor_action, is_expected_direct_child,
 };
 
-pub(super) struct BrowserInitialChildAnchorRouter {
+#[cfg(target_family = "wasm")]
+pub(crate) enum BrowserInitialChildAnchorRouterEvent {
+    VerifiedChildFetched { task: AmbientAgentTask },
+}
+
+pub(crate) struct BrowserInitialChildAnchorRouter {
     parent_task_id: AmbientAgentTaskId,
     terminal_view: WeakViewHandle<TerminalView>,
-    orchestration_viewer_model: ModelHandle<OrchestrationViewerModel>,
+    #[cfg(target_family = "wasm")]
+    verified_child_viewer_model: Option<ModelHandle<OrchestrationViewerModel>>,
     initial_child_anchor: ChildAnchor,
     seeded_child_ids: Option<HashSet<AmbientAgentTaskId>>,
     registered_children: HashMap<AmbientAgentTaskId, AIConversationId>,
@@ -30,88 +42,96 @@ pub(super) struct BrowserInitialChildAnchorRouter {
 }
 
 impl Entity for BrowserInitialChildAnchorRouter {
+    #[cfg(target_family = "wasm")]
+    type Event = BrowserInitialChildAnchorRouterEvent;
+    #[cfg(not(target_family = "wasm"))]
     type Event = ();
 }
 
 impl BrowserInitialChildAnchorRouter {
     #[cfg(target_family = "wasm")]
-    pub(super) fn new(
+    pub(super) fn new_for_viewer(
         parent_task_id: AmbientAgentTaskId,
         terminal_view: WeakViewHandle<TerminalView>,
         orchestration_viewer_model: ModelHandle<OrchestrationViewerModel>,
         ctx: &mut ModelContext<Self>,
+    ) -> Self {
+        ctx.subscribe_to_model(&orchestration_viewer_model, |router, _, event, ctx| {
+            let OrchestrationViewerModelEvent::ChildRegistered {
+                task_id,
+                conversation_id,
+            } = event;
+            router.child_registered(*task_id, *conversation_id, ctx);
+        });
+        ctx.subscribe_to_model(
+            &OrchestrationEventStreamer::handle(ctx),
+            |router, _, event, ctx| {
+                let OrchestrationEventStreamerEvent::ViewerModeSeeded {
+                    parent_task_id,
+                    child_run_ids,
+                } = event
+                else {
+                    return;
+                };
+                router.viewer_mode_seeded(*parent_task_id, child_run_ids, ctx);
+            },
+        );
+        let registered_children = orchestration_viewer_model.as_ref(ctx).registered_children();
+        let mut router = Self::new(parent_task_id, terminal_view);
+        router.verified_child_viewer_model = Some(orchestration_viewer_model);
+        for (task_id, conversation_id) in registered_children {
+            router.child_registered(task_id, conversation_id, ctx);
+        }
+        router
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn new(
+        parent_task_id: AmbientAgentTaskId,
+        terminal_view: WeakViewHandle<TerminalView>,
     ) -> Self {
         let initial_child_anchor = parse_current_url()
             .as_ref()
             .and_then(ViewerLocation::parse)
             .map(|location| location.child_anchor)
             .unwrap_or(ChildAnchor::Root);
-        Self::new_with_anchor(
-            parent_task_id,
-            terminal_view,
-            orchestration_viewer_model,
-            initial_child_anchor,
-            ctx,
-        )
+        Self::new_with_anchor(parent_task_id, terminal_view, initial_child_anchor)
     }
 
     fn new_with_anchor(
         parent_task_id: AmbientAgentTaskId,
         terminal_view: WeakViewHandle<TerminalView>,
-        orchestration_viewer_model: ModelHandle<OrchestrationViewerModel>,
         initial_child_anchor: ChildAnchor,
-        ctx: &mut ModelContext<Self>,
     ) -> Self {
-        ctx.subscribe_to_model(&orchestration_viewer_model, |router, _, event, ctx| {
-            router.handle_viewer_model_event(event, ctx);
-        });
-        ctx.subscribe_to_model(
-            &OrchestrationEventStreamer::handle(ctx),
-            |router, _, event, ctx| {
-                router.handle_streamer_event(event, ctx);
-            },
-        );
-        let registered_children = orchestration_viewer_model.as_ref(ctx).registered_children();
-
         Self {
             parent_task_id,
             terminal_view,
-            orchestration_viewer_model,
+            #[cfg(target_family = "wasm")]
+            verified_child_viewer_model: None,
             initial_child_anchor,
             seeded_child_ids: None,
-            registered_children,
+            registered_children: HashMap::new(),
             initial_anchor_resolution_emitted: false,
             initial_anchor_fetch_in_flight: false,
         }
     }
-
-    fn handle_viewer_model_event(
+    pub(crate) fn child_registered(
         &mut self,
-        event: &OrchestrationViewerModelEvent,
+        task_id: AmbientAgentTaskId,
+        conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
-        match event {
-            OrchestrationViewerModelEvent::ChildRegistered {
-                task_id,
-                conversation_id,
-            } => {
-                self.registered_children.insert(*task_id, *conversation_id);
-                self.maybe_resolve_initial_child_anchor(ctx);
-            }
-        }
+        self.registered_children.insert(task_id, conversation_id);
+        self.maybe_resolve_initial_child_anchor(ctx);
     }
 
-    fn handle_streamer_event(
+    pub(crate) fn viewer_mode_seeded(
         &mut self,
-        event: &OrchestrationEventStreamerEvent,
+        parent_task_id: AmbientAgentTaskId,
+        child_run_ids: &[AmbientAgentTaskId],
         ctx: &mut ModelContext<Self>,
     ) {
-        if let OrchestrationEventStreamerEvent::ViewerModeSeeded {
-            parent_task_id,
-            child_run_ids,
-        } = event
-            && *parent_task_id == self.parent_task_id
-        {
+        if parent_task_id == self.parent_task_id {
             self.seeded_child_ids = Some(child_run_ids.iter().copied().collect());
             self.maybe_resolve_initial_child_anchor(ctx);
         }
@@ -156,7 +176,6 @@ impl BrowserInitialChildAnchorRouter {
         self.initial_anchor_fetch_in_flight = true;
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
         let parent_task_id = self.parent_task_id;
-        let orchestration_viewer_model = self.orchestration_viewer_model.clone();
         ctx.spawn(
             async move { ai_client.get_ambient_agent_task(&task_id).await },
             move |router, result, ctx| {
@@ -166,9 +185,18 @@ impl BrowserInitialChildAnchorRouter {
                         if task.task_id == task_id
                             && is_expected_direct_child(&task, task_id, parent_task_id) =>
                     {
-                        orchestration_viewer_model.update(ctx, |model, ctx| {
-                            model.register_child(task, ctx);
-                        });
+                        #[cfg(target_family = "wasm")]
+                        if let Some(model) = router.verified_child_viewer_model.clone() {
+                            model.update(ctx, |model, ctx| {
+                                model.register_child(task, ctx);
+                            });
+                        } else {
+                            ctx.emit(BrowserInitialChildAnchorRouterEvent::VerifiedChildFetched {
+                                task,
+                            });
+                        }
+                        #[cfg(not(target_family = "wasm"))]
+                        let _ = task;
                     }
                     Ok(_) | Err(_) => {
                         router.finish_initial_anchor_resolution(None, ctx);

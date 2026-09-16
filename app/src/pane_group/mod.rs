@@ -140,6 +140,8 @@ use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeModal, RoleChangeModalEvent,
 };
 use crate::terminal::shared_session::share_modal::{ShareSessionModal, ShareSessionModalEvent};
+#[cfg(target_family = "wasm")]
+use crate::terminal::shared_session::viewer::browser_initial_child_anchor_router::BrowserInitialChildAnchorRouter;
 use crate::terminal::shared_session::{
     self, IsSharedSessionCreator, SharedSessionActionSource, SharedSessionSource,
 };
@@ -967,7 +969,8 @@ pub struct PaneGroup {
     /// every child in the server-reported list has a local conversation.
     pending_parent_child_seeds: HashMap<AmbientAgentTaskId, PendingParentChildSeed>,
     #[cfg(target_family = "wasm")]
-    settled_initial_child_anchors: HashSet<AmbientAgentTaskId>,
+    initial_child_anchor_routers:
+        HashMap<AmbientAgentTaskId, ModelHandle<BrowserInitialChildAnchorRouter>>,
 
     /// Test-only: counts `spawn_ancestor_list_fetch_if_needed` dispatches, so
     /// tests can assert that a burst of `TasksUpdated` re-drives coalesces
@@ -3229,7 +3232,7 @@ impl PaneGroup {
             pending_child_hydrations: HashMap::new(),
             pending_parent_child_seeds: HashMap::new(),
             #[cfg(target_family = "wasm")]
-            settled_initial_child_anchors: HashSet::new(),
+            initial_child_anchor_routers: HashMap::new(),
             #[cfg(test)]
             parent_child_seed_fetch_dispatch_count: 0,
             failed_viewer_child_sessions: HashMap::new(),

@@ -933,7 +933,7 @@ impl TerminalManager {
                         });
                         #[cfg(target_family = "wasm")]
                         let initial_child_anchor_router = ctx.add_model(|model_ctx| {
-                            BrowserInitialChildAnchorRouter::new(
+                            BrowserInitialChildAnchorRouter::new_for_viewer(
                                 task_id,
                                 weak_view_handle.clone(),
                                 model.clone(),

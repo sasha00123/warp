@@ -50,7 +50,7 @@ Keep fragments client-only. Do not add selection state to native `warp://` inten
 
 #### 3. Restore anchors after root hydration
 Keep a parsed child run ID pending until initial root orchestration hydration explicitly settles. On child registration, resolve the run ID through `BlocklistAIHistoryModel`, then use the existing pane materialization and swap path.
-Keep browser URL parsing, hydration state, verified anchor fetching, and restoration emission in a WASM-owned viewer component. The universal orchestration viewer model remains responsible for child discovery and status tracking and only publishes completed child registrations to that component.
+Keep browser URL parsing, hydration state, verified anchor fetching, and restoration emission in a WASM-owned router shared by viewer and pane-group hydration. The universal orchestration viewer model remains responsible for child discovery and status tracking; each hydration source feeds seeded and registered children into the router.
 The bounded ancestor seed may omit a valid child. If the requested anchor is absent after the seed, fetch that run directly and restore it only when its `parent_run_id` identifies the current root. A missing, inaccessible, or out-of-tree run remains invalid.
 
 Initial restoration does not write history. If hydration settles without a matching child, select the root and remove the invalid fragment with `replaceState`. Do not use a timeout.

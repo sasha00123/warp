@@ -1,13 +1,9 @@
 use std::sync::Arc;
 
-use chrono::Utc;
 use parking_lot::Mutex;
 use warpui::{App, ModelHandle, ViewHandle};
 
 use super::*;
-use crate::ai::ambient_agents::{AmbientAgentTask, AmbientAgentTaskState};
-use crate::ai::blocklist::BlocklistAIHistoryModel;
-use crate::features::FeatureFlag;
 use crate::test_util::add_window_with_terminal;
 use crate::test_util::terminal::initialize_app_for_terminal_view;
 
@@ -16,34 +12,40 @@ const CHILD_TASK_ID: &str = "22222222-2222-2222-2222-222222222222";
 const OTHER_PARENT_TASK_ID: &str = "33333333-3333-3333-3333-333333333333";
 
 #[test]
-fn waits_for_seeded_child_registration_and_ignores_stale_completion() {
-    let _unified_stack = FeatureFlag::OrchestrationUnifiedStack.override_enabled(true);
+fn waits_for_seeded_child_registration_without_fetching() {
     App::test((), |mut app| async move {
-        let (terminal_view, viewer_model, router) =
+        let (terminal_view, router) =
             setup(&mut app, ChildAnchor::Selected(task_id(CHILD_TASK_ID)));
         let restored = observe_restorations(&mut app, &terminal_view);
+        let child_conversation_id = AIConversationId::new();
 
         router.update(&mut app, |router, ctx| {
-            router.handle_streamer_event(
-                &OrchestrationEventStreamerEvent::ViewerModeSeeded {
-                    parent_task_id: task_id(PARENT_TASK_ID),
-                    child_run_ids: vec![task_id(CHILD_TASK_ID)],
-                },
-                ctx,
-            );
+            router.viewer_mode_seeded(task_id(PARENT_TASK_ID), &[task_id(CHILD_TASK_ID)], ctx);
         });
         router.read(&app, |router, _| {
             assert!(!router.initial_anchor_fetch_in_flight);
         });
         assert!(restored.lock().is_empty());
-        viewer_model.update(&mut app, |model, ctx| {
-            model.register_child(child_task(), ctx);
+        router.update(&mut app, |router, ctx| {
+            router.child_registered(task_id(CHILD_TASK_ID), child_conversation_id, ctx);
         });
 
-        let child_conversation_id = viewer_model.read(&app, |model, _| {
-            model.registered_children()[&task_id(CHILD_TASK_ID)]
-        });
+        assert_eq!(*restored.lock(), vec![Some(child_conversation_id)]);
+    });
+}
 
+#[test]
+fn ignores_a_completion_after_registration_resolves_the_anchor() {
+    App::test((), |mut app| async move {
+        let (terminal_view, router) =
+            setup(&mut app, ChildAnchor::Selected(task_id(CHILD_TASK_ID)));
+        let restored = observe_restorations(&mut app, &terminal_view);
+        let child_conversation_id = AIConversationId::new();
+
+        router.update(&mut app, |router, ctx| {
+            router.viewer_mode_seeded(task_id(PARENT_TASK_ID), &[task_id(CHILD_TASK_ID)], ctx);
+            router.child_registered(task_id(CHILD_TASK_ID), child_conversation_id, ctx);
+        });
         router.update(&mut app, |router, ctx| {
             router.finish_initial_anchor_resolution(None, ctx);
         });
@@ -54,17 +56,11 @@ fn waits_for_seeded_child_registration_and_ignores_stale_completion() {
 #[test]
 fn clears_an_invalid_anchor_after_the_seed_settles() {
     App::test((), |mut app| async move {
-        let (terminal_view, _, router) = setup(&mut app, ChildAnchor::Invalid);
+        let (terminal_view, router) = setup(&mut app, ChildAnchor::Invalid);
         let restored = observe_restorations(&mut app, &terminal_view);
 
         router.update(&mut app, |router, ctx| {
-            router.handle_streamer_event(
-                &OrchestrationEventStreamerEvent::ViewerModeSeeded {
-                    parent_task_id: task_id(PARENT_TASK_ID),
-                    child_run_ids: vec![],
-                },
-                ctx,
-            );
+            router.viewer_mode_seeded(task_id(PARENT_TASK_ID), &[], ctx);
         });
 
         assert_eq!(*restored.lock(), vec![None]);
@@ -74,17 +70,11 @@ fn clears_an_invalid_anchor_after_the_seed_settles() {
 #[test]
 fn ignores_hydration_for_another_parent() {
     App::test((), |mut app| async move {
-        let (terminal_view, _, router) = setup(&mut app, ChildAnchor::Invalid);
+        let (terminal_view, router) = setup(&mut app, ChildAnchor::Invalid);
         let restored = observe_restorations(&mut app, &terminal_view);
 
         router.update(&mut app, |router, ctx| {
-            router.handle_streamer_event(
-                &OrchestrationEventStreamerEvent::ViewerModeSeeded {
-                    parent_task_id: task_id(OTHER_PARENT_TASK_ID),
-                    child_run_ids: vec![],
-                },
-                ctx,
-            );
+            router.viewer_mode_seeded(task_id(OTHER_PARENT_TASK_ID), &[], ctx);
         });
 
         router.read(&app, |router, _| {
@@ -100,36 +90,18 @@ fn setup(
     initial_child_anchor: ChildAnchor,
 ) -> (
     ViewHandle<TerminalView>,
-    ModelHandle<OrchestrationViewerModel>,
     ModelHandle<BrowserInitialChildAnchorRouter>,
 ) {
     initialize_app_for_terminal_view(app);
     let terminal_view = add_window_with_terminal(app, None);
-    let terminal_view_id = terminal_view.id();
-    BlocklistAIHistoryModel::handle(app).update(app, |history, ctx| {
-        let conversation_id =
-            history.start_new_conversation(terminal_view_id, false, true, false, ctx);
-        history.set_viewing_shared_session_for_conversation(conversation_id, true);
-        history.set_active_conversation_id(conversation_id, terminal_view_id, ctx);
-    });
-    let viewer_model = app.add_model(|ctx| {
-        OrchestrationViewerModel::new(
-            task_id(PARENT_TASK_ID),
-            terminal_view_id,
-            terminal_view.downgrade(),
-            ctx,
-        )
-    });
-    let router = app.add_model(|ctx| {
+    let router = app.add_model(|_| {
         BrowserInitialChildAnchorRouter::new_with_anchor(
             task_id(PARENT_TASK_ID),
             terminal_view.downgrade(),
-            viewer_model.clone(),
             initial_child_anchor,
-            ctx,
         )
     });
-    (terminal_view, viewer_model, router)
+    (terminal_view, router)
 }
 
 fn observe_restorations(
@@ -150,35 +122,4 @@ fn observe_restorations(
 
 fn task_id(id: &str) -> AmbientAgentTaskId {
     id.parse().expect("hardcoded task id parses")
-}
-
-fn child_task() -> AmbientAgentTask {
-    let now = Utc::now();
-    AmbientAgentTask {
-        task_id: task_id(CHILD_TASK_ID),
-        parent_run_id: Some(PARENT_TASK_ID.to_string()),
-        title: "Worker".to_string(),
-        state: AmbientAgentTaskState::Queued,
-        prompt: String::new(),
-        created_at: now,
-        started_at: Some(now),
-        updated_at: now,
-        run_time: Some("PT1S".parse().unwrap()),
-        status_message: None,
-        source: None,
-        execution_location: None,
-        session_id: None,
-        session_link: None,
-        creator: None,
-        executor: None,
-        conversation_id: None,
-        request_usage: None,
-        is_sandbox_running: false,
-        agent_config_snapshot: None,
-        artifacts: vec![],
-        last_event_sequence: None,
-        children: vec![],
-        debug_agent_available: false,
-        scope: None,
-    }
 }
