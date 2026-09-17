@@ -27,12 +27,14 @@ use super::codex_transcript::{
     parse_session_meta, rehydrate_codex_transcript,
 };
 use super::json_utils::read_json_file_or_default;
-use super::save_coordinator::{SaveCoordinator, save_transcript_and_block};
+use super::harness_persistence::{
+    HarnessPersistence, PersistenceOutcome, save_transcript_and_block,
+};
 use super::transcript_persistence::{
     CapturedTranscript, capture_transcript_with_retry, needs_capture_retry, read_jsonl_capture,
-    upload_captured_transcript,
+    upload_captured_transcript, UploadedTranscriptUsage,
 };
-use super::usage_reporting::{CaptureIdentity, UsageReporter};
+use super::usage_reporting::CaptureIdentity;
 use super::{
     HarnessRunner, JSONMCPServer, ResumePayload, SavePoint, ThirdPartyHarness, write_temp_file,
 };
@@ -226,8 +228,7 @@ struct CodexHarnessRunner {
     client: Arc<dyn HarnessSupportClient>,
     terminal_driver: ModelHandle<TerminalDriver>,
     state: Mutex<CodexRunnerState>,
-    saves: SaveCoordinator,
-    usage: UsageReporter,
+    persistence: HarnessPersistence,
     /// Codex session UUID. Populated lazily by [`HarnessRunner::handle_session_update`]
     /// once the codex hooks emit `SessionStart`. Set once (using `OnceLock`).
     session_id: OnceLock<Uuid>,
@@ -288,8 +289,7 @@ impl CodexHarnessRunner {
             client,
             terminal_driver,
             state: Mutex::new(CodexRunnerState::Preexec),
-            saves: SaveCoordinator::default(),
-            usage: UsageReporter::default(),
+            persistence: HarnessPersistence::default(),
             session_id: session_id_cell,
             transcript_path: transcript_path_cell,
             preexisting_conversation_id,
@@ -321,23 +321,26 @@ impl CodexHarnessRunner {
         conversation_id: &ServerConversationToken,
         is_final: bool,
         foreground: &ModelSpawner<AgentDriver>,
-    ) -> Result<()> {
-        let capture = capture_transcript_with_retry(self.usage.is_enabled(), || async {
-            self.handle_session_update(foreground).await?;
-            let Some(session_id) = self.session_id.get().copied() else {
-                return Ok(None);
-            };
-            let Some(transcript_path) = self.resolve_transcript_path().await? else {
-                return Ok(None);
-            };
-            let identity = self.usage.begin_capture();
-            tokio::task::spawn_blocking(move || {
-                capture_transcript_with_usage(session_id, &transcript_path, is_final, identity)
-            })
-            .await
-            .context("Native transcript capture task failed")?
-            .map(Some)
-        })
+    ) -> Result<UploadedTranscriptUsage> {
+        let capture = capture_transcript_with_retry(
+            self.persistence.is_reporting_enabled(),
+            || async {
+                self.handle_session_update(foreground).await?;
+                let Some(session_id) = self.session_id.get().copied() else {
+                    return Ok(None);
+                };
+                let Some(transcript_path) = self.resolve_transcript_path().await? else {
+                    return Ok(None);
+                };
+                let identity = self.persistence.begin_capture();
+                tokio::task::spawn_blocking(move || {
+                    capture_transcript_with_usage(session_id, &transcript_path, is_final, identity)
+                })
+                .await
+                .context("Native transcript capture task failed")?
+                .map(Some)
+            },
+        )
         .await?;
         let Some(capture) = capture else {
             if is_final {
@@ -348,12 +351,10 @@ impl CodexHarnessRunner {
             } else {
                 log::debug!("Codex session or rollout not yet available");
             }
-            return Ok(());
+            return Ok(UploadedTranscriptUsage::empty());
         };
         log::info!("Uploading Codex transcript to conversation {conversation_id}");
-        let report = upload_captured_transcript(client, conversation_id, capture).await?;
-        self.usage.stage_uploaded_report(report);
-        Ok(())
+        upload_captured_transcript(client, conversation_id, capture).await
     }
 }
 
@@ -476,29 +477,26 @@ impl HarnessRunner for CodexHarnessRunner {
         Ok(())
     }
 
-    fn save_coordinator(&self) -> &SaveCoordinator {
-        &self.saves
-    }
-    fn usage_reporter(&self) -> Option<&UsageReporter> {
-        Some(&self.usage)
+    fn persistence(&self) -> &HarnessPersistence {
+        &self.persistence
     }
 
     async fn save_conversation(
         &self,
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
-    ) -> Result<()> {
+    ) -> PersistenceOutcome {
         if matches!(save_point, SavePoint::Periodic)
             && !super::has_running_cli_agent(&self.terminal_driver, foreground).await
         {
             log::debug!("Will not save conversation, Codex not in progress");
-            return Ok(());
+            return PersistenceOutcome::block_only(Ok(()));
         }
 
         let (conversation_id, block_id) = match &*self.state.lock() {
             CodexRunnerState::Preexec => {
                 log::warn!("save_conversation called before start");
-                return Ok(());
+                return PersistenceOutcome::block_only(Ok(()));
             }
             CodexRunnerState::Running {
                 conversation_id,
@@ -548,15 +546,15 @@ fn capture_transcript_with_usage(
         root: capture.diagnostics,
         ..Default::default()
     };
-    let usage_report = identity.and_then(|identity| {
-        identity.build_usage_report(
+    let usage_request = identity.and_then(|identity| {
+        identity.build_usage_request(
             captured_at,
             extract_codex(&session_id.to_string(), &envelope.entries, &diagnostics),
         )
     });
     Ok(CapturedTranscript {
         transcript_body,
-        usage_report,
+        usage_request,
         needs_retry: needs_capture_retry(&diagnostics),
     })
 }

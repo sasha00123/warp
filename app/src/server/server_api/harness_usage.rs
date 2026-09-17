@@ -1,293 +1,58 @@
-//! Task-authenticated publication of the server-supported subset of native harness usage.
-//!
-//! These wire types intentionally exclude producer-local scope, session identity, and diagnostics
-//! so extractor changes do not implicitly change the publication contract.
-use std::collections::BTreeMap;
+//! Task-authenticated publication of native harness usage.
 use std::time::Duration;
 
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 use http::header::{CONTENT_TYPE, RETRY_AFTER};
 use http_client::StatusCode;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
-use warp_harness_usage::{
-    AttributedUsage, CacheCreation, ClaudeUsage, CodexUsage, CoverageStatus, NativePayload,
-    ToolCalls, UsagePayload, UsageSnapshot,
-};
+use warp_harness_usage::api::HarnessUsageRequest;
 
 use super::super::ServerApi;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
+mod wire;
 
 const MAX_BODY_BYTES: usize = 1024 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// One cumulative capture, retained unchanged across publication retries.
-#[derive(Clone, Serialize)]
-pub struct HarnessUsageReport {
-    pub execution_id: i64,
-    pub capture_sequence: i64,
-    pub captured_at: DateTime<Utc>,
-    #[serde(flatten)]
-    snapshot: HarnessSnapshotWire,
-}
-
-impl HarnessUsageReport {
-    /// Copies a native snapshot into the stable contract, deriving its harness from the payload.
-    ///
-    /// Publication validation is deferred to [`Self::encode`].
-    pub fn new(
-        execution_id: i64,
-        capture_sequence: i64,
-        captured_at: DateTime<Utc>,
-        snapshot: &UsageSnapshot,
-    ) -> Self {
-        let coverage = UsageCoverageWire {
-            token_status: snapshot.coverage.token_status.into(),
-            tool_status: snapshot.coverage.tool_status.into(),
-        };
-        let snapshot = match &snapshot.payload {
-            NativePayload::Claude(payload) => HarnessSnapshotWire::ClaudeCode(UsageSnapshotWire {
-                coverage,
-                payload: payload.into(),
-            }),
-            NativePayload::Codex(payload) => HarnessSnapshotWire::Codex(UsageSnapshotWire {
-                coverage,
-                payload: payload.into(),
-            }),
-        };
-        Self {
-            execution_id,
-            capture_sequence,
-            captured_at,
-            snapshot,
-        }
-    }
-
-    /// Encodes a positive, usable capture within the publication body limit.
-    pub(super) fn encode(&self) -> Result<Vec<u8>> {
-        ensure!(
-            self.execution_id > 0 && self.capture_sequence > 0,
-            "Invalid harness capture identity"
-        );
-        ensure!(
-            self.snapshot.has_usable_category(),
-            "No usable harness usage category"
-        );
-        let body = serde_json::to_vec(self)?;
-        ensure!(
-            body.len() <= MAX_BODY_BYTES,
-            "Harness usage body exceeds limit"
-        );
-        Ok(body)
-    }
-}
-
-#[derive(Clone, Serialize)]
-#[serde(
-    tag = "harness",
-    content = "snapshot",
-    rename_all = "SCREAMING_SNAKE_CASE"
-)]
-enum HarnessSnapshotWire {
-    ClaudeCode(UsageSnapshotWire<ClaudeTokenUsageWire>),
-    Codex(UsageSnapshotWire<CodexTokenUsageWire>),
-}
-
-impl HarnessSnapshotWire {
-    fn has_usable_category(&self) -> bool {
-        let coverage = match self {
-            Self::ClaudeCode(snapshot) => &snapshot.coverage,
-            Self::Codex(snapshot) => &snapshot.coverage,
-        };
-        coverage.token_status != CoverageStatusWire::Unavailable
-            || coverage.tool_status != CoverageStatusWire::Unavailable
-    }
-}
-
-#[derive(Clone, Serialize)]
-struct UsageSnapshotWire<T> {
-    coverage: UsageCoverageWire,
-    payload: UsagePayloadWire<T>,
-}
-
-#[derive(Clone, Serialize)]
-struct UsageCoverageWire {
-    token_status: CoverageStatusWire,
-    tool_status: CoverageStatusWire,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum CoverageStatusWire {
-    Known,
-    Partial,
-    Unavailable,
-}
-
-impl From<CoverageStatus> for CoverageStatusWire {
-    fn from(status: CoverageStatus) -> Self {
-        match status {
-            CoverageStatus::Known => Self::Known,
-            CoverageStatus::Partial => Self::Partial,
-            CoverageStatus::Unavailable => Self::Unavailable,
-        }
-    }
-}
-
-#[derive(Clone, Serialize)]
-struct UsagePayloadWire<T> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    usage: Option<T>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    attribution: Vec<AttributedUsageWire<T>>,
-    #[serde(rename = "toolCalls", skip_serializing_if = "Option::is_none")]
-    tool_calls: Option<ToolCallsWire>,
-}
-
-impl<T, U> From<&UsagePayload<T>> for UsagePayloadWire<U>
-where
-    for<'a> U: From<&'a T>,
-{
-    fn from(payload: &UsagePayload<T>) -> Self {
-        Self {
-            usage: payload.usage.as_ref().map(U::from),
-            attribution: payload.attribution.iter().map(Into::into).collect(),
-            tool_calls: payload.tool_calls.as_ref().map(Into::into),
-        }
-    }
-}
-
-#[derive(Clone, Serialize)]
-struct AttributedUsageWire<T> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    service_tier: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    inference_geo: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    speed: Option<String>,
-    usage: T,
-}
-
-impl<T, U> From<&AttributedUsage<T>> for AttributedUsageWire<U>
-where
-    for<'a> U: From<&'a T>,
-{
-    fn from(usage: &AttributedUsage<T>) -> Self {
-        Self {
-            model: usage.attribution.model.clone(),
-            service_tier: usage.attribution.service_tier.clone(),
-            inference_geo: usage.attribution.inference_geo.clone(),
-            speed: usage.attribution.speed.clone(),
-            usage: (&usage.usage).into(),
-        }
-    }
-}
-
-#[derive(Clone, Serialize)]
-struct ClaudeTokenUsageWire {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    input_tokens: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output_tokens: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cache_read_input_tokens: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cache_creation_input_tokens: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cache_creation: Option<CacheCreationWire>,
-}
-
-impl From<&ClaudeUsage> for ClaudeTokenUsageWire {
-    fn from(usage: &ClaudeUsage) -> Self {
-        Self {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cache_read_input_tokens: usage.cache_read_input_tokens,
-            cache_creation_input_tokens: usage.cache_creation_input_tokens,
-            cache_creation: usage.cache_creation.as_ref().map(Into::into),
-        }
-    }
-}
-
-#[derive(Clone, Serialize)]
-struct CacheCreationWire {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ephemeral_5m_input_tokens: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ephemeral_1h_input_tokens: Option<i64>,
-}
-
-impl From<&CacheCreation> for CacheCreationWire {
-    fn from(usage: &CacheCreation) -> Self {
-        Self {
-            ephemeral_5m_input_tokens: usage.ephemeral_5m_input_tokens,
-            ephemeral_1h_input_tokens: usage.ephemeral_1h_input_tokens,
-        }
-    }
-}
-
-#[derive(Clone, Serialize)]
-struct CodexTokenUsageWire {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    input_tokens: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cached_input_tokens: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output_tokens: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reasoning_output_tokens: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    total_tokens: Option<i64>,
-}
-
-impl From<&CodexUsage> for CodexTokenUsageWire {
-    fn from(usage: &CodexUsage) -> Self {
-        Self {
-            input_tokens: usage.input_tokens,
-            cached_input_tokens: usage.cached_input_tokens,
-            output_tokens: usage.output_tokens,
-            reasoning_output_tokens: usage.reasoning_output_tokens,
-            total_tokens: usage.total_tokens,
-        }
-    }
-}
-
-#[derive(Clone, Serialize)]
-struct ToolCallsWire {
-    total: i64,
-    #[serde(rename = "byName")]
-    by_name: BTreeMap<String, i64>,
-}
-
-impl From<&ToolCalls> for ToolCallsWire {
-    fn from(tool_calls: &ToolCalls) -> Self {
-        Self {
-            total: tool_calls.total,
-            by_name: tool_calls.by_name.clone(),
-        }
-    }
+pub(super) fn encode_request(request: &HarnessUsageRequest) -> Result<Vec<u8>> {
+    ensure!(
+        request.execution_id > 0 && request.capture_sequence > 0,
+        "Invalid harness capture identity"
+    );
+    ensure!(
+        request.has_usable_category(),
+        "No usable harness usage category"
+    );
+    let body = serde_json::to_vec(request)?;
+    ensure!(
+        body.len() <= MAX_BODY_BYTES,
+        "Harness usage body exceeds limit"
+    );
+    Ok(body)
 }
 
 /// Execution ownership supplied only by authenticated, reporting-enabled startup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub struct HarnessUsageContext {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HarnessUsageCapability {
     pub execution_id: i64,
 }
 
-pub(super) fn deserialize_harness_usage_context<'de, D>(
+pub(super) fn deserialize_harness_usage_capability<'de, D>(
     deserializer: D,
-) -> Result<Option<HarnessUsageContext>, D::Error>
+) -> Result<Option<HarnessUsageCapability>, D::Error>
 where
     D: Deserializer<'de>,
 {
     let value = Value::deserialize(deserializer)?;
     // Malformed capability data must not break raw transcript persistence or resume.
-    Ok(serde_json::from_value::<HarnessUsageContext>(value)
+    Ok(serde_json::from_value::<wire::StartupCapability>(value)
         .ok()
-        .filter(|context| context.execution_id > 0))
+        .filter(|capability| capability.execution_id > 0)
+        .map(|capability| HarnessUsageCapability {
+            execution_id: capability.execution_id,
+        }))
 }
 
 /// Server disposition for one cumulative usage capture.
@@ -302,13 +67,6 @@ pub enum HarnessUsagePublicationStatus {
     Idempotent,
 }
 
-/// Acknowledgment of the retained capture identity.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct HarnessUsagePublication {
-    pub status: HarnessUsagePublicationStatus,
-    pub execution_id: i64,
-    pub capture_sequence: i64,
-}
 
 /// Determines whether publication may retry or should stop for this execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -356,11 +114,11 @@ impl HarnessUsageError {
             .get(RETRY_AFTER)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| parse_harness_usage_retry_after(value, Utc::now()));
-        let problem = response.json::<HarnessUsageProblem>().await.ok();
+        let problem = response.json::<wire::Problem>().await.ok();
         let problem_type = problem.as_ref().map(|problem| problem.problem_type);
         let kind = if matches!(
             problem_type,
-            Some(HarnessUsageProblemType::Disabled | HarnessUsageProblemType::Unsupported)
+            Some(wire::ProblemType::Disabled | wire::ProblemType::Unsupported)
         ) || matches!(
             status,
             StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED
@@ -391,23 +149,6 @@ impl HarnessUsageError {
     }
 }
 
-#[derive(Deserialize)]
-struct HarnessUsageProblem {
-    #[serde(rename = "type", default)]
-    problem_type: HarnessUsageProblemType,
-    retryable: Option<bool>,
-}
-
-#[derive(Clone, Copy, Default, Deserialize)]
-enum HarnessUsageProblemType {
-    #[serde(rename = "https://docs.warp.dev/errors/feature_not_available")]
-    Disabled,
-    #[serde(rename = "https://docs.warp.dev/errors/operation_not_supported")]
-    Unsupported,
-    #[default]
-    #[serde(other)]
-    Unknown,
-}
 
 pub(super) fn parse_harness_usage_retry_after(value: &str, now: DateTime<Utc>) -> Option<Duration> {
     value
@@ -429,10 +170,9 @@ impl ServerApi {
     pub async fn publish_harness_usage_for_task(
         &self,
         task_id: &AmbientAgentTaskId,
-        report: &HarnessUsageReport,
-    ) -> Result<HarnessUsagePublication, HarnessUsageError> {
-        let body = report
-            .encode()
+        request: &HarnessUsageRequest,
+    ) -> Result<HarnessUsagePublicationStatus, HarnessUsageError> {
+        let body = encode_request(request)
             .map_err(|_| HarnessUsageError::new(HarnessUsageErrorKind::InvalidReport))?;
         let auth_token = self
             .get_or_refresh_access_token()
@@ -442,7 +182,7 @@ impl ServerApi {
             "{}/api/v1/harness-support/harness-usage",
             crate::ChannelState::server_root_url()
         );
-        let mut request = self
+        let mut http_request = self
             .base_client
             .http_client()
             .post(&url)
@@ -450,16 +190,16 @@ impl ServerApi {
             .body(body)
             .timeout(REQUEST_TIMEOUT);
         if let Some(token) = auth_token.as_bearer_token() {
-            request = request.bearer_auth(token);
+            http_request = http_request.bearer_auth(token);
         }
         for (name, value) in self
             .ambient_agent_headers_for_task(task_id)
             .await
             .map_err(HarnessUsageError::from_request_preparation_error)?
         {
-            request = request.header(name, value);
+            http_request = http_request.header(name, value);
         }
-        let response = request
+        let response = http_request
             .send()
             .await
             .map_err(|_| HarnessUsageError::new(HarnessUsageErrorKind::Retryable))?;
@@ -467,8 +207,8 @@ impl ServerApi {
             self.observe_iap_challenge(&response);
             return Err(HarnessUsageError::from_response(response).await);
         }
-        let publication = response
-            .json::<HarnessUsagePublication>()
+        let acknowledgment = response
+            .json::<wire::PublicationAcknowledgment>()
             .await
             .map_err(|error| {
                 let kind = if error.is_decode() {
@@ -478,17 +218,17 @@ impl ServerApi {
                 };
                 HarnessUsageError::new(kind)
             })?;
-        if publication.execution_id <= 0
-            || publication.capture_sequence <= 0
-            || (publication.status != HarnessUsagePublicationStatus::IgnoredOlderCapture
-                && (publication.execution_id != report.execution_id
-                    || publication.capture_sequence != report.capture_sequence))
+        if acknowledgment.execution_id <= 0
+            || acknowledgment.capture_sequence <= 0
+            || (acknowledgment.status != HarnessUsagePublicationStatus::IgnoredOlderCapture
+                && (acknowledgment.execution_id != request.execution_id
+                    || acknowledgment.capture_sequence != request.capture_sequence))
         {
             return Err(HarnessUsageError::new(
                 HarnessUsageErrorKind::InvalidResponse,
             ));
         }
-        Ok(publication)
+        Ok(acknowledgment.status)
     }
 }
 

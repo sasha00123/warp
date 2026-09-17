@@ -8,13 +8,12 @@ use instant::Instant;
 use warp_harness_usage::{
     CaptureDiagnostics, JsonlCapture, JsonlDiagnostics, JsonlLimits, JsonlReadStatus, parse_jsonl,
 };
+use warp_harness_usage::api::HarnessUsageRequest;
 use warpui::r#async::Timer;
 use warpui::duration_with_jitter;
 
 use crate::ai::agent::api::ServerConversationToken;
-use crate::server::server_api::harness_support::{
-    HarnessSupportClient, HarnessUsageReport, upload_to_target,
-};
+use crate::server::server_api::harness_support::{HarnessSupportClient, upload_to_target};
 
 const MAX_CAPTURE_ATTEMPTS: usize = 3;
 const JSONL_LIMITS: JsonlLimits = JsonlLimits {
@@ -37,8 +36,19 @@ pub(super) fn read_jsonl_capture(path: &Path) -> Result<JsonlCapture> {
 /// Raw transcript bytes and usage derived from the same native capture.
 pub(super) struct CapturedTranscript {
     pub transcript_body: Vec<u8>,
-    pub usage_report: Option<HarnessUsageReport>,
+    pub usage_request: Option<HarnessUsageRequest>,
     pub needs_retry: bool,
+}
+
+pub(super) struct UploadedTranscriptUsage(Option<HarnessUsageRequest>);
+
+impl UploadedTranscriptUsage {
+    pub(super) fn empty() -> Self {
+        Self(None)
+    }
+    pub(super) fn into_request(self) -> Option<HarnessUsageRequest> {
+        self.0
+    }
 }
 
 pub(super) fn needs_capture_retry(diagnostics: &CaptureDiagnostics) -> bool {
@@ -91,7 +101,7 @@ pub(super) async fn upload_captured_transcript(
     client: &dyn HarnessSupportClient,
     conversation_id: &ServerConversationToken,
     capture: CapturedTranscript,
-) -> Result<Option<HarnessUsageReport>> {
+) -> Result<UploadedTranscriptUsage> {
     let target = client.get_transcript_upload_target(conversation_id).await?;
     upload_to_target(
         client.http_client(),
@@ -104,7 +114,7 @@ pub(super) async fn upload_captured_transcript(
         "Harness transcript uploaded: bytes={}",
         capture.transcript_body.len()
     );
-    Ok(capture.usage_report)
+    Ok(UploadedTranscriptUsage(capture.usage_request))
 }
 
 fn capture_backoff(attempt: usize) -> Duration {

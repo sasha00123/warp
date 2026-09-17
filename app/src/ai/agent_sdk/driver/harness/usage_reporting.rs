@@ -1,19 +1,24 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use chrono::{DateTime, Utc};
+use futures::channel::oneshot;
+use futures::future::{AbortHandle, Abortable, Shared};
+use futures::FutureExt as _;
 use instant::Instant;
 use parking_lot::Mutex;
 use warp_harness_usage::ExtractionOutcome;
-use warpui::r#async::{FutureExt as _, Timer};
+use warp_harness_usage::api::HarnessUsageRequest;
 use warpui::duration_with_jitter;
+use warpui::r#async::executor::Background;
+use warpui::r#async::{FutureExt as _, Timer};
 
+use super::transcript_persistence::UploadedTranscriptUsage;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::{
-    HarnessUsageContext, HarnessUsageError, HarnessUsageErrorKind, HarnessUsagePublication,
-    HarnessUsageReport,
+    HarnessUsageCapability, HarnessUsageError, HarnessUsageErrorKind,
+    HarnessUsagePublicationStatus,
 };
 
 const MAX_PUBLICATION_ATTEMPTS: usize = 3;
@@ -26,8 +31,6 @@ struct ReportingContext {
     client: Arc<ServerApi>,
 }
 
-/// Starts uninitialized, initializes once as active or disabled, and only transitions from active
-/// to disabled after a permanent publication failure or sequence exhaustion.
 #[derive(Default)]
 enum ReportingLifecycle {
     #[default]
@@ -36,11 +39,32 @@ enum ReportingLifecycle {
     Active(ReportingContext),
 }
 
+#[derive(Clone)]
+struct ActivePublisher {
+    abort: AbortHandle,
+    done: Shared<oneshot::Receiver<()>>,
+}
+struct PublicationDrain {
+    state: Arc<Mutex<ReportingState>>,
+    active: ActivePublisher,
+}
+
+impl Drop for PublicationDrain {
+    fn drop(&mut self) {
+        self.active.abort.abort();
+        let mut state = self.state.lock();
+        state.pending = None;
+        state.active = None;
+    }
+}
+
 #[derive(Default)]
 struct ReportingState {
     lifecycle: ReportingLifecycle,
     sequence: i64,
-    pending: Option<HarnessUsageReport>,
+    pending: Option<HarnessUsageRequest>,
+    active: Option<ActivePublisher>,
+    closing: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -50,30 +74,37 @@ pub(super) struct CaptureIdentity {
 }
 
 impl CaptureIdentity {
-    pub(super) fn build_usage_report(
+    pub(super) fn build_usage_request(
         self,
         captured_at: DateTime<Utc>,
         outcome: ExtractionOutcome,
-    ) -> Option<HarnessUsageReport> {
+    ) -> Option<HarnessUsageRequest> {
         match outcome {
-            ExtractionOutcome::Usable(snapshot) => Some(HarnessUsageReport::new(
-                self.execution_id,
-                self.sequence,
-                captured_at,
-                &snapshot,
-            )),
-            ExtractionOutcome::Unavailable(reasons) => {
-                log::debug!("Harness usage unavailable: reasons={reasons:?}");
+            ExtractionOutcome::Usable(extracted) => {
+                if !extracted.diagnostics.reasons.is_empty() {
+                    log::debug!(
+                        "Harness usage extracted with diagnostics: reasons={:?}",
+                        extracted.diagnostics.reasons
+                    );
+                }
+                Some(HarnessUsageRequest::new(
+                    self.execution_id,
+                    self.sequence,
+                    captured_at,
+                    extracted.snapshot,
+                ))
+            }
+            ExtractionOutcome::Unavailable(diagnostics) => {
+                log::debug!("Harness usage unavailable: reasons={:?}", diagnostics.reasons);
                 None
             }
         }
     }
 }
 
-/// Per-execution usage state advanced only by the runner's ordered save operations.
 #[derive(Default)]
 pub(crate) struct UsageReporter {
-    state: Mutex<ReportingState>,
+    state: Arc<Mutex<ReportingState>>,
 }
 
 impl UsageReporter {
@@ -81,14 +112,14 @@ impl UsageReporter {
         &self,
         client: Arc<ServerApi>,
         task_id: Option<AmbientAgentTaskId>,
-        context: Option<HarnessUsageContext>,
+        capability: Option<HarnessUsageCapability>,
     ) {
-        let lifecycle = task_id.zip(context).and_then(|(task_id, context)| {
-            (context.execution_id > 0).then_some(ReportingLifecycle::Active(ReportingContext {
+        let lifecycle = task_id.zip(capability).map(|(task_id, capability)| {
+            ReportingLifecycle::Active(ReportingContext {
                 task_id,
-                execution_id: context.execution_id,
+                execution_id: capability.execution_id,
                 client,
-            }))
+            })
         });
         if lifecycle.is_none() {
             log::debug!("Harness usage disabled: no supported execution-bound startup context");
@@ -105,13 +136,15 @@ impl UsageReporter {
 
     pub(super) fn begin_capture(&self) -> Option<CaptureIdentity> {
         let mut state = self.state.lock();
-        state.pending = None;
         let execution_id = match &state.lifecycle {
-            ReportingLifecycle::Active(context) => context.execution_id,
-            ReportingLifecycle::Uninitialized | ReportingLifecycle::Disabled => return None,
+            ReportingLifecycle::Active(context) if !state.closing => context.execution_id,
+            ReportingLifecycle::Uninitialized
+            | ReportingLifecycle::Disabled
+            | ReportingLifecycle::Active(_) => return None,
         };
         let Some(next) = state.sequence.checked_add(1) else {
             state.lifecycle = ReportingLifecycle::Disabled;
+            state.pending = None;
             log::warn!("Harness usage disabled: capture sequence exhausted");
             return None;
         };
@@ -122,32 +155,89 @@ impl UsageReporter {
         })
     }
 
-    pub(super) fn stage_uploaded_report(&self, report: Option<HarnessUsageReport>) {
-        self.state.lock().pending = report;
+    pub(super) fn stage_uploaded(
+        &self,
+        uploaded: UploadedTranscriptUsage,
+        background: &Background,
+    ) {
+        let Some(request) = uploaded.into_request() else {
+            return;
+        };
+        self.stage_request(request, background);
     }
 
-    /// Publishes the report staged by a successful raw transcript upload.
-    pub(super) async fn publish_staged(&self) {
-        let (report, context) = {
+    fn stage_request(&self, request: HarnessUsageRequest, background: &Background) {
+        let mut state = self.state.lock();
+        if state.closing || !matches!(&state.lifecycle, ReportingLifecycle::Active(_)) {
+            return;
+        }
+        state.pending = Some(request);
+        if state.active.is_some() {
+            return;
+        }
+
+        let shared_state = self.state.clone();
+        let (abort, registration) = AbortHandle::new_pair();
+        let (done, receiver) = oneshot::channel();
+        state.active = Some(ActivePublisher {
+            abort,
+            done: receiver.shared(),
+        });
+        background
+            .spawn(async move {
+                let _ = Abortable::new(publish_pending(shared_state.clone()), registration).await;
+                shared_state.lock().active = None;
+                let _ = done.send(());
+            })
+            .detach();
+    }
+
+    pub(super) async fn close_and_drain(&self, budget: Duration) {
+        let active = {
             let mut state = self.state.lock();
+            state.closing = true;
+            state.active.clone()
+        };
+        let Some(active) = active else {
+            self.state.lock().pending = None;
+            return;
+        };
+        let mut drain = PublicationDrain {
+            state: self.state.clone(),
+            active,
+        };
+        if (&mut drain.active.done).with_timeout(budget).await.is_err() {
+            drain.active.abort.abort();
+            let _ = (&mut drain.active.done).await;
+        }
+    }
+}
+
+async fn publish_pending(state: Arc<Mutex<ReportingState>>) {
+    loop {
+        let (request, context) = {
+            let mut state = state.lock();
             let context = match &state.lifecycle {
                 ReportingLifecycle::Active(context) => context.clone(),
-                ReportingLifecycle::Uninitialized | ReportingLifecycle::Disabled => return,
+                ReportingLifecycle::Uninitialized | ReportingLifecycle::Disabled => {
+                    state.pending = None;
+                    return;
+                }
             };
-            let Some(report) = state.pending.take() else {
+            let Some(request) = state.pending.take() else {
                 return;
             };
-            (report, context)
+            (request, context)
         };
         let started = Instant::now();
         let result = publish_with_retry(
-            &report,
-            |report| {
+            &request,
+            |request| {
                 let context = context.clone();
                 async move {
                     context
                         .client
-                        .publish_harness_usage_for_task(&context.task_id, report)
+                        .publish_harness_usage_for_task(&context.task_id, request)
                         .with_timeout(REQUEST_TIMEOUT)
                         .await
                         .unwrap_or_else(|_| {
@@ -159,9 +249,8 @@ impl UsageReporter {
         )
         .await;
         match result {
-            Ok(publication) => log::debug!(
-                "Harness usage published: status={:?} elapsed_ms={}",
-                publication.status,
+            Ok(status) => log::debug!(
+                "Harness usage published: status={status:?} elapsed_ms={}",
                 started.elapsed().as_millis()
             ),
             Err(error) => {
@@ -172,7 +261,7 @@ impl UsageReporter {
                         | HarnessUsageErrorKind::Conflict
                         | HarnessUsageErrorKind::InvalidResponse
                 ) {
-                    let mut state = self.state.lock();
+                    let mut state = state.lock();
                     state.lifecycle = ReportingLifecycle::Disabled;
                     state.pending = None;
                 }
@@ -183,18 +272,18 @@ impl UsageReporter {
 }
 
 async fn publish_with_retry<'a, F, Fut, S, Sleep>(
-    report: &'a HarnessUsageReport,
+    request: &'a HarnessUsageRequest,
     mut send: F,
     mut sleep: S,
-) -> Result<HarnessUsagePublication, HarnessUsageError>
+) -> Result<HarnessUsagePublicationStatus, HarnessUsageError>
 where
-    F: FnMut(&'a HarnessUsageReport) -> Fut,
-    Fut: Future<Output = Result<HarnessUsagePublication, HarnessUsageError>>,
+    F: FnMut(&'a HarnessUsageRequest) -> Fut,
+    Fut: Future<Output = Result<HarnessUsagePublicationStatus, HarnessUsageError>>,
     S: FnMut(Duration) -> Sleep,
     Sleep: Future<Output = ()>,
 {
     for attempt in 1..=MAX_PUBLICATION_ATTEMPTS {
-        match send(report).await {
+        match send(request).await {
             Err(error)
                 if error.kind == HarnessUsageErrorKind::Retryable
                     && attempt < MAX_PUBLICATION_ATTEMPTS =>
@@ -203,7 +292,6 @@ where
                     .retry_after
                     .unwrap_or_default()
                     .max(publication_backoff(attempt));
-                // Retry-After cannot extend idle lifetime indefinitely.
                 if delay > REQUEST_TIMEOUT {
                     return Err(error);
                 }

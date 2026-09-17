@@ -25,12 +25,14 @@ use super::claude_transcript::{
     read_envelope_with_diagnostics, rehydrate_claude_transcript,
 };
 use super::json_utils::{read_json_file_or_default, write_json_file};
-use super::save_coordinator::{SaveCoordinator, save_transcript_and_block};
+use super::harness_persistence::{
+    HarnessPersistence, PersistenceOutcome, save_transcript_and_block,
+};
 use super::transcript_persistence::{
     CapturedTranscript, capture_transcript_with_retry, needs_capture_retry,
-    upload_captured_transcript,
+    upload_captured_transcript, UploadedTranscriptUsage,
 };
-use super::usage_reporting::{CaptureIdentity, UsageReporter};
+use super::usage_reporting::CaptureIdentity;
 use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
     ThirdPartyHarness, cli_agent_session_status, write_temp_file,
@@ -252,8 +254,7 @@ struct ClaudeHarnessRunner {
     server_api: Arc<ServerApi>,
     terminal_driver: ModelHandle<TerminalDriver>,
     state: Mutex<ClaudeRunnerState>,
-    saves: SaveCoordinator,
-    usage: UsageReporter,
+    persistence: HarnessPersistence,
     session_id: Uuid,
     harness_working_dir: PathBuf,
     parent_bridge: Option<MessageBridge>,
@@ -337,8 +338,7 @@ impl ClaudeHarnessRunner {
             server_api,
             terminal_driver,
             state: Mutex::new(ClaudeRunnerState::Preexec),
-            saves: SaveCoordinator::default(),
-            usage: UsageReporter::default(),
+            persistence: HarnessPersistence::default(),
             session_id,
             harness_working_dir: harness_working_dir.to_path_buf(),
             parent_bridge,
@@ -563,29 +563,26 @@ impl HarnessRunner for ClaudeHarnessRunner {
     async fn handle_session_update(&self, _foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
         self.handle_parent_bridge_session_update().await
     }
-    fn save_coordinator(&self) -> &SaveCoordinator {
-        &self.saves
-    }
-    fn usage_reporter(&self) -> Option<&UsageReporter> {
-        Some(&self.usage)
+    fn persistence(&self) -> &HarnessPersistence {
+        &self.persistence
     }
 
     async fn save_conversation(
         &self,
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
-    ) -> Result<()> {
+    ) -> PersistenceOutcome {
         if matches!(save_point, SavePoint::Periodic)
             && !super::has_running_cli_agent(&self.terminal_driver, foreground).await
         {
             log::debug!("Will not save conversation, Claude Code not in progress");
-            return Ok(());
+            return PersistenceOutcome::block_only(Ok(()));
         }
 
         let (conversation_id, block_id) = match &*self.state.lock() {
             ClaudeRunnerState::Preexec => {
                 log::warn!("save_conversation called before start");
-                return Ok(());
+                return PersistenceOutcome::block_only(Ok(()));
             }
             ClaudeRunnerState::Running {
                 conversation_id,
@@ -608,7 +605,7 @@ impl HarnessRunner for ClaudeHarnessRunner {
                 harness_working_dir,
                 claude_version,
                 require_main_transcript,
-                &self.usage,
+                &self.persistence,
             ),
             super::upload_current_block_snapshot(
                 foreground,
@@ -641,14 +638,14 @@ async fn capture_and_upload_transcript(
     harness_working_dir: &Path,
     claude_version: Option<String>,
     require_main_transcript: bool,
-    reporter: &UsageReporter,
-) -> Result<()> {
+    persistence: &HarnessPersistence,
+) -> Result<UploadedTranscriptUsage> {
     log::info!("Uploading Claude Code transcript to conversation {conversation_id}");
 
     let config_dir = claude_config_dir().context("Failed to resolve Claude config dir")?;
     let harness_working_dir = harness_working_dir.to_path_buf();
-    let capture = capture_transcript_with_retry(reporter.is_enabled(), || {
-        let identity = reporter.begin_capture();
+    let capture = capture_transcript_with_retry(persistence.is_reporting_enabled(), || {
+        let identity = persistence.begin_capture();
         let harness_working_dir = harness_working_dir.clone();
         let config_dir = config_dir.clone();
         let claude_version = claude_version.clone();
@@ -670,9 +667,7 @@ async fn capture_and_upload_transcript(
     })
     .await?
     .context("Claude transcript capture returned no data")?;
-    let report = upload_captured_transcript(client, conversation_id, capture).await?;
-    reporter.stage_uploaded_report(report);
-    Ok(())
+    upload_captured_transcript(client, conversation_id, capture).await
 }
 
 fn capture_transcript_with_usage(
@@ -693,8 +688,8 @@ fn capture_transcript_with_usage(
     envelope.claude_version = claude_version;
     let transcript_body =
         serde_json::to_vec(&envelope).context("Failed to serialize transcript envelope")?;
-    let usage_report = identity.and_then(|identity| {
-        identity.build_usage_report(
+    let usage_request = identity.and_then(|identity| {
+        identity.build_usage_request(
             captured_at,
             extract_claude(
                 &session_id.to_string(),
@@ -709,7 +704,7 @@ fn capture_transcript_with_usage(
     });
     Ok(CapturedTranscript {
         transcript_body,
-        usage_report,
+        usage_request,
         needs_retry: needs_capture_retry(&diagnostics),
     })
 }

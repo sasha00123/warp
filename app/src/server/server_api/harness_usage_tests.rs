@@ -7,15 +7,16 @@ use http_client::StatusCode;
 use mockito::Matcher;
 use serde_json::json;
 use warp_core::channel::ChannelState;
-use warp_harness_usage::{
-    ClaudeUsage, Coverage, CoverageStatus, NativePayload, ReasonCode, ToolCalls, UsagePayload,
-    UsageSnapshot,
+use warp_harness_usage::api::{
+    ClaudeUsage, Coverage, CoverageStatus, HarnessUsageRequest, HarnessUsageSnapshot, ToolCalls,
+    UsagePayload, UsageSnapshot,
 };
 use warp_server_client::base_client::{AMBIENT_WORKLOAD_TOKEN_HEADER, CLOUD_AGENT_ID_HEADER};
 
 use super::{
-    HarnessUsageContext, HarnessUsageError, HarnessUsageErrorKind, HarnessUsagePublicationStatus,
-    HarnessUsageReport, ResolvedHarnessPrompt, ServerApi, parse_harness_usage_retry_after,
+    HarnessUsageCapability, HarnessUsageError, HarnessUsageErrorKind,
+    HarnessUsagePublicationStatus, ResolvedHarnessPrompt, ServerApi,
+    parse_harness_usage_retry_after,
 };
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 
@@ -23,19 +24,17 @@ fn task_id() -> AmbientAgentTaskId {
     "550e8400-e29b-41d4-a716-446655440000".parse().unwrap()
 }
 
-fn report() -> HarnessUsageReport {
-    HarnessUsageReport::new(
+fn report() -> HarnessUsageRequest {
+    HarnessUsageRequest::new(
         41,
         7,
         Utc.with_ymd_and_hms(2026, 9, 10, 12, 0, 0).unwrap(),
-        &UsageSnapshot {
+        HarnessUsageSnapshot::ClaudeCode(UsageSnapshot {
             coverage: Coverage {
                 token_status: CoverageStatus::Known,
                 tool_status: CoverageStatus::Partial,
-                captured_scope: "root_and_captured_subagents",
-                reason_codes: BTreeMap::from([(ReasonCode::IncompleteInput, 1)]),
             },
-            payload: NativePayload::Claude(UsagePayload {
+            payload: UsagePayload {
                 usage: Some(ClaudeUsage {
                     input_tokens: Some(9_007_199_254_740_993),
                     output_tokens: None,
@@ -48,11 +47,8 @@ fn report() -> HarnessUsageReport {
                     total: 1,
                     by_name: BTreeMap::from([("Read".into(), 1)]),
                 }),
-            }),
-            session_ids: vec!["root".into()],
-            root_scope: "root".into(),
-            subagent_scope: vec!["child".into()],
-        },
+            },
+        }),
     )
 }
 
@@ -83,7 +79,7 @@ fn startup_accepts_only_the_advertised_execution() {
 
     assert_eq!(
         prompt.harness_usage,
-        Some(HarnessUsageContext { execution_id: 41 })
+        Some(HarnessUsageCapability { execution_id: 41 })
     );
     assert_eq!(prompt.resumption_prompt.as_deref(), Some("continue"));
 }
@@ -146,7 +142,7 @@ fn publication_reuses_workload_auth_but_not_an_unrelated_ambient_task() {
         let publication =
             block_on(server.publish_harness_usage_for_task(&task_id, &report)).unwrap();
 
-        assert_eq!(publication.status, expected_status);
+        assert_eq!(publication, expected_status);
         assert_eq!(report.execution_id, 41);
         request.assert();
         request.remove();

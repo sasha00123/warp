@@ -3170,9 +3170,9 @@ impl AgentDriver {
                 third_party_harness_model_config.as_ref(),
             )?
             .into();
-        if let Some(reporter) = runner.usage_reporter() {
-            reporter.initialize(server_api, task_id, usage_context);
-        }
+        runner
+            .persistence()
+            .initialize(server_api, task_id, usage_context);
 
         let stored_runner = runner.clone();
         foreground

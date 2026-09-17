@@ -10,8 +10,10 @@ use warpui::r#async::FutureExt as _;
 use warpui::r#async::executor::Background;
 
 use super::{
-    SaveCoordinator, SaveOperation, remaining_final_save_budget, save_transcript_and_block,
+    SaveCoordinator, SaveOperation, remaining_final_save_budget,
 };
+use crate::ai::agent_sdk::driver::harness::harness_persistence::save_transcript_and_block;
+use crate::ai::agent_sdk::driver::harness::transcript_persistence::UploadedTranscriptUsage;
 use crate::ai::agent_sdk::driver::harness::SavePoint;
 
 #[tokio::test]
@@ -62,11 +64,12 @@ async fn coalesces_saves_without_blocking_other_work() {
         })
     });
 
-    coordinator.enqueue(SavePoint::Periodic, operation.clone(), &background);
+    coordinator.set_worker_operation(operation);
+    coordinator.enqueue(SavePoint::Periodic, &background);
     assert_eq!(starts.recv().await.unwrap(), SavePoint::Periodic);
-    coordinator.enqueue(SavePoint::PostTurn, operation.clone(), &background);
-    coordinator.enqueue(SavePoint::Periodic, operation.clone(), &background);
-    coordinator.enqueue(SavePoint::PostTurn, operation, &background);
+    coordinator.enqueue(SavePoint::PostTurn, &background);
+    coordinator.enqueue(SavePoint::Periodic, &background);
+    coordinator.enqueue(SavePoint::PostTurn, &background);
     let (ping, pong) = oneshot::channel();
     background
         .spawn(async move { ping.send(()).unwrap() })
@@ -106,14 +109,15 @@ async fn block_failure_does_not_cancel_raw_transcript() {
         async {
             released.await?;
             uploaded.store(true, Ordering::SeqCst);
-            Ok(())
+            Ok(UploadedTranscriptUsage::empty())
         },
         async {
             release.send(()).unwrap();
             Err(anyhow!("block unavailable"))
         },
     )
-    .await;
+    .await
+    .into_result();
 
     assert!(uploaded.load(Ordering::SeqCst));
     assert!(result.is_err());
@@ -134,7 +138,8 @@ async fn raw_failure_does_not_cancel_block_snapshot() {
             Ok(())
         },
     )
-    .await;
+    .await
+    .into_result();
 
     assert!(uploaded.load(Ordering::SeqCst));
     assert!(result.is_err());
@@ -147,6 +152,7 @@ async fn simultaneous_failures_preserve_both_errors() {
         future::ready(Err(anyhow!("block unavailable"))),
     )
     .await
+    .into_result()
     .unwrap_err();
     let message = format!("{error:#}");
     assert!(message.contains("raw unavailable"));
@@ -177,9 +183,10 @@ async fn cancelled_blocking_capture_cannot_upload_after_final_save() {
             Ok(())
         })
     });
-    coordinator.enqueue(SavePoint::Periodic, operation.clone(), &background);
+    coordinator.set_worker_operation(operation);
+    coordinator.enqueue(SavePoint::Periodic, &background);
     start.await.unwrap();
-    coordinator.enqueue(SavePoint::PostTurn, operation.clone(), &background);
+    coordinator.enqueue(SavePoint::PostTurn, &background);
 
     coordinator
         .finalize(
@@ -192,7 +199,7 @@ async fn cancelled_blocking_capture_cannot_upload_after_final_save() {
         )
         .await
         .unwrap();
-    coordinator.enqueue(SavePoint::PostTurn, operation, &background);
+    coordinator.enqueue(SavePoint::PostTurn, &background);
     release.send(()).unwrap();
     read_finished.await.unwrap();
 
@@ -270,7 +277,8 @@ async fn interrupted_finalizer_still_joins_the_cancelled_worker() {
             Ok(())
         })
     });
-    coordinator.enqueue(SavePoint::Periodic, operation, &background);
+    coordinator.set_worker_operation(operation);
+    coordinator.enqueue(SavePoint::Periodic, &background);
     start.await.unwrap();
     assert!(
         coordinator

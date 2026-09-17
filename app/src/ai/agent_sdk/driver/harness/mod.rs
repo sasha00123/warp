@@ -16,7 +16,6 @@ use warp_cli::{
     WARP_PARENT_RUN_ID_ENV, WARP_RUN_ID_ENV, WS_SERVER_URL_OVERRIDE_ENV,
 };
 use warp_core::channel::ChannelState;
-use warp_errors::report_if_error;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -45,6 +44,7 @@ mod codex;
 pub(crate) mod codex_transcript;
 pub(crate) mod exit_escalation;
 mod gemini;
+mod harness_persistence;
 mod json_utils;
 pub(crate) mod process_control;
 mod save_coordinator;
@@ -57,9 +57,8 @@ use claude_transcript::ClaudeResumeInfo;
 use codex::CodexHarness;
 use codex_transcript::CodexResumeInfo;
 use gemini::GeminiHarness;
-use save_coordinator::{SaveCoordinator, final_save_budget};
+use harness_persistence::{HarnessPersistence, PersistenceOutcome};
 pub(crate) use telemetry::ThirdPartyHarnessTelemetryEvent;
-use usage_reporting::UsageReporter;
 
 /// Harness-agnostic payload describing how to resume an existing conversation.
 ///
@@ -541,18 +540,8 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
         &self,
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
-    ) -> Result<()>;
-    /// Returns the coordinator owned by this runner for its full lifecycle.
-    fn save_coordinator(&self) -> &SaveCoordinator;
-    fn usage_reporter(&self) -> Option<&UsageReporter> {
-        None
-    }
-
-    async fn publish_staged_usage(&self) {
-        if let Some(reporter) = self.usage_reporter() {
-            reporter.publish_staged().await;
-        }
-    }
+    ) -> PersistenceOutcome;
+    fn persistence(&self) -> &HarnessPersistence;
 
     /// Queues a save without waiting for persistence; overlapping requests are coalesced.
     async fn enqueue_save(
@@ -560,49 +549,21 @@ pub(crate) trait HarnessRunner: Send + Sync + 'static {
         save_point: SavePoint,
         foreground: &ModelSpawner<AgentDriver>,
     ) -> Result<()> {
-        let coordinator = self.save_coordinator();
         let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
-        let runner = self.clone();
-        let foreground = foreground.clone();
-        coordinator.enqueue(
+        self.persistence().enqueue(
+            Arc::downgrade(&self),
             save_point,
-            Arc::new(move |save_point| {
-                let runner = runner.clone();
-                let foreground = foreground.clone();
-                Box::pin(async move {
-                    if matches!(save_point, SavePoint::PostTurn) {
-                        report_if_error!(
-                            runner
-                                .handle_session_update(&foreground)
-                                .await
-                                .context("Failed to handle harness session update before save")
-                        );
-                    }
-                    let persistence = runner.save_conversation(save_point, &foreground).await;
-                    runner.publish_staged_usage().await;
-                    persistence
-                })
-            }),
-            &background,
+            foreground.clone(),
+            background,
         );
         Ok(())
     }
 
     /// Finalizes persistence within one deadline; staged usage does not determine its result.
     async fn finalize_saves(&self, foreground: &ModelSpawner<AgentDriver>) -> Result<()> {
-        self.save_coordinator()
-            .finalize(
-                async {
-                    report_if_error!(
-                        self.handle_session_update(foreground)
-                            .await
-                            .context("Failed to handle harness session update before final save")
-                    );
-                    self.save_conversation(SavePoint::Final, foreground).await
-                },
-                self.publish_staged_usage(),
-                final_save_budget(),
-            )
+        let background = foreground.spawn(|_, ctx| ctx.background_executor()).await?;
+        self.persistence()
+            .finalize(self, foreground, &background)
             .await
     }
 

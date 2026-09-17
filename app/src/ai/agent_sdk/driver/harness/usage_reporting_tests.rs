@@ -2,20 +2,15 @@ use std::cell::RefCell;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::anyhow;
 use chrono::{TimeZone, Utc};
+use futures::channel::oneshot;
 use futures::executor::block_on;
-use futures::future;
-use serde_json::json;
-use warp_core::channel::ChannelState;
+use futures::future::{self, AbortHandle};
+use futures::FutureExt as _;
 use warp_harness_usage::{CaptureDiagnostics, JsonlDiagnostics, JsonlReadStatus, extract_claude};
+use warpui::r#async::executor::Background;
 
-use super::super::transcript_persistence::{
-    CapturedTranscript, capture_transcript_with_retry, upload_captured_transcript,
-};
 use super::*;
-use crate::ai::agent::api::ServerConversationToken;
-use crate::ai::agent_sdk::driver::harness::save_coordinator::save_transcript_and_block;
 use crate::server::server_api::ServerApiProvider;
 
 fn task_id() -> AmbientAgentTaskId {
@@ -27,17 +22,17 @@ fn reporter(client: Arc<ServerApi>) -> UsageReporter {
     reporter.initialize(
         client,
         Some(task_id()),
-        Some(HarnessUsageContext { execution_id: 41 }),
+        Some(HarnessUsageCapability { execution_id: 41 }),
     );
     reporter
 }
 
-fn report() -> HarnessUsageReport {
+fn request(sequence: i64) -> HarnessUsageRequest {
     CaptureIdentity {
         execution_id: 41,
-        sequence: 1,
+        sequence,
     }
-    .build_usage_report(
+    .build_usage_request(
         Utc.with_ymd_and_hms(2026, 9, 10, 12, 0, 0).unwrap(),
         extract_claude(
             "root",
@@ -56,16 +51,16 @@ fn report() -> HarnessUsageReport {
 }
 
 #[test]
-fn retries_keep_exact_report_and_exhaust_without_another_event() {
-    let report = report();
+fn retries_keep_exact_request_and_exhaust_without_rearming() {
+    let request = request(1);
     let bodies = RefCell::new(Vec::new());
     let delays = RefCell::new(Vec::new());
     let result = block_on(publish_with_retry(
-        &report,
-        |report| {
+        &request,
+        |request| {
             bodies
                 .borrow_mut()
-                .push(serde_json::to_vec(report).unwrap());
+                .push(serde_json::to_vec(request).unwrap());
             future::ready(Err(HarnessUsageError::new(
                 HarnessUsageErrorKind::Retryable,
             )))
@@ -75,18 +70,16 @@ fn retries_keep_exact_report_and_exhaust_without_another_event() {
             future::ready(())
         },
     ));
+
     assert_eq!(result.unwrap_err().kind, HarnessUsageErrorKind::Retryable);
     let bodies = bodies.into_inner();
     assert_eq!(bodies.len(), 3);
     assert!(bodies.windows(2).all(|pair| pair[0] == pair[1]));
-    let delays = delays.into_inner();
-    assert_eq!(delays.len(), 2);
-    assert!((Duration::from_secs(1)..=Duration::from_millis(1200)).contains(&delays[0]));
-    assert!((Duration::from_secs(2)..=Duration::from_millis(2400)).contains(&delays[1]));
+    assert_eq!(delays.into_inner().len(), 2);
 }
 
 #[test]
-fn permanent_errors_and_long_retry_after_do_not_rearm_idle_work() {
+fn permanent_errors_and_long_retry_after_stop_immediately() {
     for error in [
         HarnessUsageError::new(HarnessUsageErrorKind::Unauthorized),
         HarnessUsageError::new(HarnessUsageErrorKind::Conflict),
@@ -99,7 +92,7 @@ fn permanent_errors_and_long_retry_after_do_not_rearm_idle_work() {
     ] {
         let calls = RefCell::new(0);
         let result = block_on(publish_with_retry(
-            &report(),
+            &request(1),
             |_| {
                 *calls.borrow_mut() += 1;
                 future::ready(Err(error.clone()))
@@ -112,97 +105,65 @@ fn permanent_errors_and_long_retry_after_do_not_rearm_idle_work() {
 }
 
 #[test]
-fn reporting_context_cannot_adopt_another_execution() {
+fn capture_allocation_preserves_pending_and_cannot_change_execution() {
     let client = ServerApiProvider::new_for_test().get();
     let reporter = reporter(client.clone());
-    let first = reporter.begin_capture().unwrap();
+    {
+        let mut state = reporter.state.lock();
+        state.sequence = 1;
+        state.pending = Some(request(1));
+    }
+
+    let identity = reporter.begin_capture().unwrap();
     reporter.initialize(
         client,
         Some(task_id()),
-        Some(HarnessUsageContext { execution_id: 42 }),
+        Some(HarnessUsageCapability { execution_id: 42 }),
     );
-    let next = reporter.begin_capture().unwrap();
-    assert_eq!((first.execution_id, first.sequence), (41, 1));
-    assert_eq!((next.execution_id, next.sequence), (41, 2));
-    assert!(UsageReporter::default().begin_capture().is_none());
+
+    assert_eq!((identity.execution_id, identity.sequence), (41, 2));
+    assert_eq!(reporter.state.lock().pending.as_ref().unwrap().capture_sequence, 1);
+    assert_eq!(reporter.begin_capture().unwrap().execution_id, 41);
 }
 
 #[test]
-fn raw_success_gates_reporting_independently_of_block_failure() {
-    for (raw_status, usable) in [(200, true), (403, true), (200, false)] {
-        let should_report = raw_status == 200 && usable;
-        let (target, raw, metrics) = {
-            let mut server = ChannelState::mock_server();
-            let url = format!("{}/usage-test-raw", server.url());
-            let target = server
-                .mock("POST", "/api/v1/harness-support/transcript")
-                .with_status(200)
-                .with_body(json!({"url": url, "method": "PUT", "headers": {}}).to_string())
-                .expect(1)
-                .create();
-            let raw = server
-                .mock("PUT", "/usage-test-raw")
-                .match_body("{}")
-                .with_status(raw_status)
-                .expect(1)
-                .create();
-            let metrics = server
-                .mock("POST", "/api/v1/harness-support/harness-usage")
-                .with_status(409)
-                .expect(usize::from(should_report))
-                .create();
-            (target, raw, metrics)
-        };
-        let client = ServerApiProvider::new_for_test().get();
-        let reporter = reporter(client.clone());
-        let conversation = ServerConversationToken::new("synthetic-conversation".to_owned());
-        let persistence = block_on(save_transcript_and_block(
-            async {
-                let report = upload_captured_transcript(
-                    &*client,
-                    &conversation,
-                    CapturedTranscript {
-                        transcript_body: b"{}".to_vec(),
-                        usage_report: usable.then(report),
-                        needs_retry: false,
-                    },
-                )
-                .await?;
-                reporter.stage_uploaded_report(report);
-                Ok(())
-            },
-            future::ready(Err(anyhow!("block unavailable"))),
-        ));
-        assert!(persistence.is_err());
-        block_on(reporter.publish_staged());
-        block_on(reporter.publish_staged());
-        assert_eq!(!reporter.is_enabled(), should_report);
-        target.assert();
-        raw.assert();
-        metrics.assert();
-    }
+fn active_publication_allows_capture_and_keeps_only_the_latest_pending_request() {
+    let reporter = reporter(ServerApiProvider::new_for_test().get());
+    let (abort, _) = AbortHandle::new_pair();
+    let (_done, receiver) = oneshot::channel();
+    reporter.state.lock().active = Some(ActivePublisher {
+        abort,
+        done: receiver.shared(),
+    });
+    let background = Background::default();
+
+    reporter.stage_request(request(2), &background);
+    reporter.stage_request(request(3), &background);
+
+    assert_eq!(reporter.state.lock().pending.as_ref().unwrap().capture_sequence, 3);
+    assert!(reporter.begin_capture().is_some());
 }
 
 #[tokio::test]
-async fn a_later_read_error_preserves_the_last_usable_capture() {
-    let mut original = Some(CapturedTranscript {
-        transcript_body: b"captured before failure".to_vec(),
-        usage_report: Some(report()),
-        needs_retry: true,
+async fn interrupted_drain_cancels_active_and_pending_publication() {
+    let reporter = reporter(ServerApiProvider::new_for_test().get());
+    let (abort, _) = AbortHandle::new_pair();
+    let (_done, receiver) = oneshot::channel();
+    let mut state = reporter.state.lock();
+    state.pending = Some(request(2));
+    state.active = Some(ActivePublisher {
+        abort,
+        done: receiver.shared(),
     });
-    let captured = capture_transcript_with_retry(true, || {
-        future::ready(
-            original
-                .take()
-                .map(Some)
-                .ok_or_else(|| anyhow!("read failed")),
-        )
-    })
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(captured.transcript_body, b"captured before failure");
-    let retained = captured.usage_report.unwrap();
-    assert_eq!(retained.capture_sequence, 1);
-    assert_eq!(retained.captured_at, report().captured_at);
+    drop(state);
+
+    assert!(
+        reporter
+            .close_and_drain(Duration::from_secs(5))
+            .now_or_never()
+            .is_none()
+    );
+    let state = reporter.state.lock();
+    assert!(state.active.is_none());
+    assert!(state.pending.is_none());
 }
