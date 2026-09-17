@@ -29,6 +29,10 @@ use warp_graphql::mutations::remove_user_from_team::{
     RemoveUserFromTeam, RemoveUserFromTeamInput, RemoveUserFromTeamResult,
     RemoveUserFromTeamVariables,
 };
+use warp_graphql::mutations::remove_user_from_workspace::{
+    RemoveUserFromWorkspace, RemoveUserFromWorkspaceInput, RemoveUserFromWorkspaceResult,
+    RemoveUserFromWorkspaceVariables,
+};
 use warp_graphql::mutations::rename_team::{
     RenameTeam, RenameTeamInput, RenameTeamResult, RenameTeamVariables,
 };
@@ -69,7 +73,7 @@ use crate::server::ids::ServerId;
 use crate::workspaces::gql_convert::workspaces_metadata_response_from_gql;
 use crate::workspaces::team::{DiscoverableTeam, MembershipRole};
 use crate::workspaces::user_workspaces::{CreateTeamResponse, WorkspacesMetadataWithPricing};
-use crate::workspaces::workspace::Workspace;
+use crate::workspaces::workspace::{Workspace, WorkspaceUid};
 
 #[cfg_attr(test, automock)]
 #[cfg_attr(not(target_family = "wasm"), async_trait)]
@@ -103,6 +107,15 @@ pub trait TeamClient: 'static + Send + Sync {
         &self,
         user_uid: UserUid,
         team_uid: ServerId,
+        entrypoint: CloudObjectEventEntrypoint,
+    ) -> Result<WorkspacesMetadataWithPricing>;
+
+    /// Removes the user from the workspace, including all of its teams, and returns the
+    /// updated workspaces metadata.
+    async fn remove_user_from_workspace(
+        &self,
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
         entrypoint: CloudObjectEventEntrypoint,
     ) -> Result<WorkspacesMetadataWithPricing>;
 
@@ -356,6 +369,44 @@ impl TeamClient for ServerApi {
             }
             RemoveUserFromTeamResult::Unknown => {
                 Err(anyhow!("unknown error while removing user from team"))
+            }
+        }
+    }
+
+    async fn remove_user_from_workspace(
+        &self,
+        user_uid: UserUid,
+        workspace_uid: WorkspaceUid,
+        entrypoint: CloudObjectEventEntrypoint,
+    ) -> Result<WorkspacesMetadataWithPricing> {
+        let variables = RemoveUserFromWorkspaceVariables {
+            input: RemoveUserFromWorkspaceInput {
+                user_uid: user_uid.as_str().into(),
+                workspace_uid: String::from(workspace_uid).into(),
+                entrypoint: entrypoint.into(),
+            },
+            request_context: get_request_context(),
+        };
+
+        let operation = RemoveUserFromWorkspace::build(variables);
+        let result = self
+            .send_graphql_request(operation, None)
+            .await?
+            .remove_user_from_workspace;
+
+        match result {
+            RemoveUserFromWorkspaceResult::RemoveUserFromWorkspaceOutput(output) => {
+                if !output.success {
+                    return Err(anyhow!("failed to remove user from workspace"));
+                } else {
+                    self.workspaces_metadata().await
+                }
+            }
+            RemoveUserFromWorkspaceResult::UserFacingError(user_facing_error) => {
+                Err(anyhow!(get_user_facing_error_message(user_facing_error)))
+            }
+            RemoveUserFromWorkspaceResult::Unknown => {
+                Err(anyhow!("unknown error while removing user from workspace"))
             }
         }
     }
