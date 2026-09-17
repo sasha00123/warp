@@ -31,9 +31,9 @@ use websocket::{Error as WebsocketError, Message, Sink, Stream, WebsocketMessage
 
 use super::{
     AMBIENT_CREATE_SESSION_MAX_ATTEMPTS, ConfirmedReconnection, MAX_PRE_RECONNECT_BYTES,
-    MAX_PRE_RECONNECT_MESSAGES, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus, Stage,
-    StartupFailure, StartupRetryState, confirm_reconnection, share_with_team_uid_for_init_payload,
-    startup_max_attempts,
+    MAX_PRE_RECONNECT_MESSAGES, Network, PTY_READS_BATCH_THRESHOLD, PtyBytesBatchStatus,
+    SERVER_MAX_WEBSOCKET_MESSAGE_BYTES, Stage, StartupFailure, StartupRetryState,
+    confirm_reconnection, share_with_team_uid_for_init_payload, startup_max_attempts,
 };
 use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::AuthManager;
@@ -64,17 +64,15 @@ fn connect_mock_websocket(
     network: &ModelHandle<Network>,
     app: &mut App,
     startup_attempt: Option<usize>,
-    max_message_size: usize,
 ) -> mpsc::UnboundedReceiver<Message> {
     let (wire_tx, wire_rx) = mpsc::unbounded();
     let wire_tx = wire_tx.sink_map_err(|error| anyhow::Error::new(error).into());
     network.update(app, |network, ctx| {
-        network.on_websocket_connected_with_max_message_size(
+        network.on_websocket_connected(
             startup_attempt,
             network.ws_proxy_rx.clone(),
             wire_tx,
             stream::pending(),
-            max_message_size,
             ctx,
         );
     });
@@ -613,13 +611,14 @@ fn test_reconnect_confirmation_flushes_pending_input_updates() {
 fn test_oversized_in_session_message_is_skipped_without_reconnecting() {
     App::test((), |mut app| async move {
         let network = create_network(&mut app, true).0;
-        let max_message_size = 256;
-        let mut wire_rx = connect_mock_websocket(&network, &mut app, None, max_message_size);
+        let mut wire_rx = connect_mock_websocket(&network, &mut app, None);
 
         network.update(&mut app, |network, _| {
             network.send_message_to_server(UpstreamMessage::UpdateActivePrompt(
                 ActivePromptUpdate {
-                    active_prompt: ActivePrompt::WarpPrompt("x".repeat(max_message_size)),
+                    active_prompt: ActivePrompt::WarpPrompt(
+                        "x".repeat(SERVER_MAX_WEBSOCKET_MESSAGE_BYTES),
+                    ),
                     last_event_no: 0,
                 },
             ));
@@ -644,8 +643,7 @@ fn test_oversized_in_session_message_is_skipped_without_reconnecting() {
 fn test_reconnect_flush_skips_oversized_unacked_event() {
     App::test((), |mut app| async move {
         let network = create_network(&mut app, true).0;
-        let max_message_size = 256;
-        let mut wire_rx = connect_mock_websocket(&network, &mut app, None, max_message_size);
+        let mut wire_rx = connect_mock_websocket(&network, &mut app, None);
 
         network.update(&mut app, |network, ctx| {
             network.unacked_terminal_events.insert(
@@ -653,7 +651,7 @@ fn test_reconnect_flush_skips_oversized_unacked_event() {
                 OrderedTerminalEvent {
                     event_no: 0,
                     event_type: OrderedTerminalEventType::PtyBytesRead {
-                        bytes: vec![0; max_message_size],
+                        bytes: vec![0; SERVER_MAX_WEBSOCKET_MESSAGE_BYTES],
                     },
                 },
             );
@@ -696,7 +694,7 @@ fn test_oversized_initialize_fails_startup_without_retry() {
                 },
             };
         });
-        let mut wire_rx = connect_mock_websocket(&network, &mut app, Some(1), 1);
+        let mut wire_rx = connect_mock_websocket(&network, &mut app, Some(1));
 
         network.update(&mut app, |network, _| {
             network

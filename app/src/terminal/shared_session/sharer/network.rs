@@ -79,7 +79,10 @@ const RECONNECT_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 const RECONNECT_CYCLE_TIMEOUT: Duration = Duration::from_secs(128);
 const MAX_PRE_RECONNECT_MESSAGES: usize = 256;
 const MAX_PRE_RECONNECT_BYTES: usize = 1024 * 1024;
+#[cfg(not(test))]
 const SERVER_MAX_WEBSOCKET_MESSAGE_BYTES: usize = 200 * 1024 * 1024;
+#[cfg(test)]
+const SERVER_MAX_WEBSOCKET_MESSAGE_BYTES: usize = 128;
 /// Exponential backoff, bounded by the reconnect cycle timeout including connection and handshake time.
 /// We should be somewhat generous with the amount of retries allowed when a sharer wants to recover their session,
 /// since they have the choice of giving up early by closing the window/stopping sharing.
@@ -1331,27 +1334,8 @@ impl Network {
         &mut self,
         startup_attempt: Option<usize>,
         ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
-        sink: impl Sink,
-        stream: impl Stream,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        self.on_websocket_connected_with_max_message_size(
-            startup_attempt,
-            ws_proxy_rx,
-            sink,
-            stream,
-            SERVER_MAX_WEBSOCKET_MESSAGE_BYTES,
-            ctx,
-        );
-    }
-
-    fn on_websocket_connected_with_max_message_size(
-        &mut self,
-        startup_attempt: Option<usize>,
-        ws_proxy_rx: async_channel::Receiver<UpstreamMessage>,
         mut sink: impl Sink,
         stream: impl Stream,
-        max_message_size: usize,
         ctx: &mut ModelContext<Self>,
     ) {
         self.connection_generation += 1;
@@ -1432,12 +1416,12 @@ impl Network {
                     let serialized = message.to_json();
                     match serialized {
                         Ok(serialized) => {
-                            if serialized.len() > max_message_size {
+                            if serialized.len() > SERVER_MAX_WEBSOCKET_MESSAGE_BYTES {
                                 if is_startup_initialize {
                                     log::warn!(
                                         "Shared session initialization exceeds websocket message limit; bytes={} limit={}",
                                         serialized.len(),
-                                        max_message_size,
+                                        SERVER_MAX_WEBSOCKET_MESSAGE_BYTES,
                                     );
                                     startup_send_failure_pending.store(true, Ordering::Release);
                                     startup_failure = Some(StartupFailure::InitializeTooLarge);
@@ -1446,7 +1430,7 @@ impl Network {
                                 log::warn!(
                                     "Skipping oversized message to shared session server; bytes={} limit={}",
                                     serialized.len(),
-                                    max_message_size,
+                                    SERVER_MAX_WEBSOCKET_MESSAGE_BYTES,
                                 );
                                 continue;
                             }
