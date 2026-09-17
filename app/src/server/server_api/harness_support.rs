@@ -10,11 +10,11 @@ use mockall::automock;
 
 #[path = "harness_usage/publication.rs"]
 mod publication;
+pub use publication::HarnessUsageCapability;
 #[cfg(test)]
 use publication::parse_harness_usage_retry_after;
-pub use publication::{
-    HarnessUsageCapability, HarnessUsageError, HarnessUsageErrorKind, HarnessUsagePublicationStatus,
-};
+#[cfg(not(target_family = "wasm"))]
+pub use publication::{HarnessUsageError, HarnessUsageErrorKind, HarnessUsagePublicationStatus};
 
 use super::ServerApi;
 #[cfg(feature = "local_fs")]

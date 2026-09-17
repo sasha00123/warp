@@ -162,8 +162,8 @@ fn active_publication_allows_capture_and_keeps_only_the_latest_pending_request()
     assert!(reporter.begin_capture().is_some());
 }
 
-#[tokio::test]
-async fn interrupted_drain_cancels_active_and_pending_publication() {
+#[test]
+fn interrupted_drain_cancels_active_and_pending_publication() {
     let reporter = reporter(ServerApiProvider::new_for_test().get());
     let (abort, _) = AbortHandle::new_pair();
     let (_done, receiver) = oneshot::channel();
