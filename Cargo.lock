@@ -2475,7 +2475,9 @@ dependencies = [
  "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.17",
+ "tokio",
  "tracing",
+ "walkdir",
  "warp_core",
  "warp_errors",
 ]
@@ -2992,6 +2994,7 @@ dependencies = [
  "session-sharing-protocol",
  "settings",
  "settings_value",
+ "url",
  "uuid",
  "warp-workflows",
  "warp_cli",
@@ -3239,15 +3242,6 @@ dependencies = [
  "regex",
  "shlex",
  "version-compare",
-]
-
-[[package]]
-name = "command-signatures-v2"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "command",
- "rust-embed 8.7.2",
 ]
 
 [[package]]
@@ -11665,33 +11659,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rquickjs"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6db7788c2818f4546daabe9ae2d1ee2f4db61ab1998d4b483494c4193cc38dab"
-dependencies = [
- "rquickjs-core",
-]
-
-[[package]]
-name = "rquickjs-core"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b12cf8646fe0af5bcff2822ccd162990f0679a1f9287c7257f4f4193a9d31ea9"
-dependencies = [
- "rquickjs-sys",
-]
-
-[[package]]
-name = "rquickjs-sys"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b747058afd4d988d056e4972ec8516a5a86fdfc103c1c1485bfee8966a0743ae"
-dependencies = [
- "cc",
-]
-
-[[package]]
 name = "rstar"
 version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -15214,7 +15181,6 @@ dependencies = [
  "comfy-table",
  "command",
  "command-corrections",
- "command-signatures-v2",
  "computer_use",
  "concat-idents",
  "console_error_panic_hook",
@@ -15344,7 +15310,6 @@ dependencies = [
  "repo_metadata",
  "reqwest",
  "rmcp",
- "rquickjs",
  "rust-embed 8.7.2",
  "rustc-hash 2.1.1",
  "rustls",
@@ -15428,7 +15393,6 @@ dependencies = [
  "warp_files",
  "warp_graphql",
  "warp_isolation_platform",
- "warp_js",
  "warp_logging",
  "warp_managed_secrets",
  "warp_multi_agent_api",
@@ -15460,7 +15424,7 @@ dependencies = [
 [[package]]
 name = "warp-command-signatures"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=1776eb16fb911ee34e95b65c909c6faa3d5a8bb6#1776eb16fb911ee34e95b65c909c6faa3d5a8bb6"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=48fd7aa5b7b4d99f5db57d1c5a25c47c05567fcf#48fd7aa5b7b4d99f5db57d1c5a25c47c05567fcf"
 dependencies = [
  "cfg-if",
  "itertools 0.10.5",
@@ -15478,7 +15442,7 @@ dependencies = [
 [[package]]
 name = "warp-completion-metadata"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/command-signatures.git?rev=1776eb16fb911ee34e95b65c909c6faa3d5a8bb6#1776eb16fb911ee34e95b65c909c6faa3d5a8bb6"
+source = "git+https://github.com/warpdotdev/command-signatures.git?rev=48fd7aa5b7b4d99f5db57d1c5a25c47c05567fcf#48fd7aa5b7b4d99f5db57d1c5a25c47c05567fcf"
 dependencies = [
  "html-escape",
  "itertools 0.10.5",
@@ -15559,8 +15523,6 @@ dependencies = [
  "anyhow",
  "async-recursion",
  "async-trait",
- "bincode",
- "cfg-if",
  "clap",
  "command",
  "derive-new",
@@ -15574,7 +15536,6 @@ dependencies = [
  "log",
  "memo-map",
  "regex",
- "rquickjs",
  "serde",
  "shellexpand",
  "smol_str",
@@ -15585,7 +15546,6 @@ dependencies = [
  "warp_cli",
  "warp_completer",
  "warp_core",
- "warp_js",
  "warp_util",
  "warpui_core",
 ]
@@ -15789,20 +15749,9 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "serial_test",
  "thiserror 2.0.17",
  "warp_core",
-]
-
-[[package]]
-name = "warp_js"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "cfg-if",
- "rquickjs",
- "serde",
- "thiserror 2.0.17",
- "uuid",
 ]
 
 [[package]]
@@ -15860,7 +15809,7 @@ dependencies = [
 [[package]]
 name = "warp_multi_agent_api"
 version = "0.0.0"
-source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=7b638a3bce15b6159116c25caa1dda62cf004b0e#7b638a3bce15b6159116c25caa1dda62cf004b0e"
+source = "git+https://github.com/warpdotdev/warp-proto-apis.git?rev=74704baabf12116438bc122550f4eb0b6a540b60#74704baabf12116438bc122550f4eb0b6a540b60"
 dependencies = [
  "prost",
  "prost-reflect",

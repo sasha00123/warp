@@ -33,6 +33,7 @@ use crate::ai::blocklist::controller::RequestInput;
 use crate::ai::llms::LLMId;
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::{Owner, Revision, ServerMetadata, ServerPermissions};
+use crate::features::FeatureFlag;
 use crate::input_suggestions::HistoryInputSuggestion;
 use crate::persistence::ModelEvent;
 use crate::persistence::model::{
@@ -40,6 +41,7 @@ use crate::persistence::model::{
     PersistedAutoexecuteMode,
 };
 use crate::server::ids::ServerId;
+use crate::server::server_api::ServerApiProvider;
 use crate::server::telemetry::context_provider::AppTelemetryContextProvider;
 use crate::terminal::model::session::SessionId;
 use crate::test_util::ai_agent_tasks::create_api_task;
@@ -2258,6 +2260,89 @@ fn test_restore_conversations_dedup_children_by_parent() {
 }
 
 #[test]
+fn closed_surface_cleanup_preserves_transferred_conversation() {
+    App::test((), |mut app| async move {
+        let old_surface = EntityId::new();
+        let new_surface = EntityId::new();
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        history.update(&mut app, |model, ctx| {
+            model.restore_conversations(new_surface, vec![conversation], ctx);
+            model.set_active_conversation_id(conversation_id, new_surface, ctx);
+            model
+                .active_conversation_for_terminal_surface
+                .insert(old_surface, conversation_id);
+            model
+                .live_conversation_ids_for_terminal_surface
+                .insert(old_surface, Vec::new());
+        });
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        app.update(|ctx| {
+            let events = events.clone();
+            ctx.subscribe_to_model(&history, move |_, event, _| {
+                events.lock().unwrap().push(event.clone());
+            });
+        });
+        history.update(&mut app, |model, ctx| {
+            model.clear_conversations_for_closed_terminal_surface(old_surface, ctx);
+        });
+
+        history.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .active_conversation_for_terminal_surface
+                    .get(&old_surface),
+                None
+            );
+            assert!(
+                !model
+                    .live_conversation_ids_for_terminal_surface
+                    .contains_key(&old_surface)
+            );
+            assert_eq!(
+                model.active_conversation_id(new_surface),
+                Some(conversation_id)
+            );
+            assert_eq!(
+                model.terminal_surface_id_for_conversation(&conversation_id),
+                Some(new_surface)
+            );
+        });
+        assert!(events.lock().unwrap().is_empty());
+    });
+}
+
+#[test]
+fn closed_surface_cleanup_clears_owned_conversations() {
+    App::test((), |mut app| async move {
+        let surface_id = EntityId::new();
+        let conversation = AIConversation::new(false, false);
+        let conversation_id = conversation.id();
+        let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        history.update(&mut app, |model, ctx| {
+            model.restore_conversations(surface_id, vec![conversation], ctx);
+            model.set_active_conversation_id(conversation_id, surface_id, ctx);
+            model.clear_conversations_for_closed_terminal_surface(surface_id, ctx);
+        });
+        history.read(&app, |model, _| {
+            assert_eq!(model.active_conversation_id(surface_id), None);
+            assert_eq!(
+                model.terminal_surface_id_for_conversation(&conversation_id),
+                None
+            );
+            assert_eq!(
+                model
+                    .cleared_conversation_ids_for_terminal_surface
+                    .get(&surface_id),
+                Some(&vec![conversation_id])
+            );
+        });
+    });
+}
+
+#[test]
 fn test_all_cleared_conversations_includes_terminal_view_id() {
     App::test((), |mut app| async move {
         let now = Local::now();
@@ -4372,6 +4457,47 @@ fn hydrate_remote_child_placeholder_with_cloud_transcript_preserves_placeholder_
             format!("{err:#}").contains("not found in conversations_by_id"),
             "error must surface the missing-placeholder reason; got: {err:#}",
         );
+    });
+}
+
+#[test]
+fn repeated_stream_completions_share_one_in_flight_metadata_fetch() {
+    let _cloud_conversations = FeatureFlag::CloudConversations.override_enabled(true);
+
+    App::test((), |mut app| async move {
+        initialize_history_persistence_for_tests(&mut app);
+        app.add_singleton_model(|_| ServerApiProvider::new_for_test());
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_surface_id = EntityId::new();
+        let conversation_id = history_model.update(&mut app, |history, ctx| {
+            let conversation_id =
+                history.start_new_conversation(terminal_surface_id, false, false, false, ctx);
+            history.set_server_conversation_token_for_conversation(
+                conversation_id,
+                "metadata-fetch-token".to_string(),
+            );
+            conversation_id
+        });
+        let stream_id = ResponseStreamId::new_for_test();
+
+        history_model.update(&mut app, |history, ctx| {
+            history.mark_response_stream_completed_successfully(
+                &stream_id,
+                conversation_id,
+                terminal_surface_id,
+                ctx,
+            );
+            history.mark_response_stream_completed_successfully(
+                &stream_id,
+                conversation_id,
+                terminal_surface_id,
+                ctx,
+            );
+            assert_eq!(
+                history.in_flight_server_metadata_fetches,
+                HashSet::from([conversation_id])
+            );
+        });
     });
 }
 
