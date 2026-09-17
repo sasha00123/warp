@@ -5,10 +5,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use instant::Instant;
+use warp_harness_usage::api::HarnessUsageRequest;
 use warp_harness_usage::{
     CaptureDiagnostics, JsonlCapture, JsonlDiagnostics, JsonlLimits, JsonlReadStatus, parse_jsonl,
 };
-use warp_harness_usage::api::HarnessUsageRequest;
 use warpui::r#async::Timer;
 use warpui::duration_with_jitter;
 

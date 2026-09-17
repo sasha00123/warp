@@ -2,23 +2,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use futures::FutureExt as _;
 use futures::channel::oneshot;
 use futures::future::{AbortHandle, Abortable, Shared};
-use futures::FutureExt as _;
 use instant::Instant;
 use parking_lot::Mutex;
 use warp_harness_usage::ExtractionOutcome;
 use warp_harness_usage::api::HarnessUsageRequest;
-use warpui::duration_with_jitter;
 use warpui::r#async::executor::Background;
 use warpui::r#async::{FutureExt as _, Timer};
+use warpui::duration_with_jitter;
 
 use super::transcript_persistence::UploadedTranscriptUsage;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
 use crate::server::server_api::ServerApi;
 use crate::server::server_api::harness_support::{
-    HarnessUsageCapability, HarnessUsageError, HarnessUsageErrorKind,
-    HarnessUsagePublicationStatus,
+    HarnessUsageCapability, HarnessUsageError, HarnessUsageErrorKind, HarnessUsagePublicationStatus,
 };
 
 const MAX_PUBLICATION_ATTEMPTS: usize = 3;
@@ -95,7 +94,10 @@ impl CaptureIdentity {
                 ))
             }
             ExtractionOutcome::Unavailable(diagnostics) => {
-                log::debug!("Harness usage unavailable: reasons={:?}", diagnostics.reasons);
+                log::debug!(
+                    "Harness usage unavailable: reasons={:?}",
+                    diagnostics.reasons
+                );
                 None
             }
         }

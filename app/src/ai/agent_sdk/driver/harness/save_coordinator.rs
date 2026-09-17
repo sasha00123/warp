@@ -65,11 +65,7 @@ impl SaveCoordinator {
         let _ = self.worker_operation.set(worker_operation);
     }
     /// Starts a runner-scoped worker or coalesces this save point into its pending work.
-    pub(super) fn enqueue(
-        &self,
-        save_point: SavePoint,
-        background: &Background,
-    ) {
+    pub(super) fn enqueue(&self, save_point: SavePoint, background: &Background) {
         let Some(worker_operation) = self.worker_operation.get().cloned() else {
             log::error!("Harness save coordinator was not initialized");
             return;
@@ -192,7 +188,6 @@ fn remaining_final_save_budget(now: SystemTime, deadline: Option<SystemTime>) ->
             .min(FINAL_SAVE_TIMEOUT)
     })
 }
-
 
 #[cfg(test)]
 #[path = "save_coordinator_tests.rs"]

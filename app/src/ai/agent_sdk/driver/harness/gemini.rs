@@ -16,8 +16,8 @@ use warpui::{ModelHandle, ModelSpawner};
 
 use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
-use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::harness_persistence::{HarnessPersistence, PersistenceOutcome};
+use super::json_utils::{read_json_file_or_default, write_json_file};
 use super::{
     HarnessCleanupDisposition, HarnessRunner, JSONMCPServer, ResumePayload, SavePoint,
     ThirdPartyHarness, write_temp_file,
@@ -238,14 +238,16 @@ impl HarnessRunner for GeminiHarnessRunner {
         };
 
         // TODO(REMOTE-1408) Also save the conversation transcript.
-        PersistenceOutcome::block_only(super::upload_current_block_snapshot(
-            foreground,
-            &self.terminal_driver,
-            self.client.as_ref(),
-            &conversation_id,
-            block_id,
+        PersistenceOutcome::block_only(
+            super::upload_current_block_snapshot(
+                foreground,
+                &self.terminal_driver,
+                self.client.as_ref(),
+                &conversation_id,
+                block_id,
+            )
+            .await,
         )
-        .await)
     }
 
     async fn cleanup(

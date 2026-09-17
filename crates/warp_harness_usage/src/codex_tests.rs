@@ -1,7 +1,8 @@
 use std::ops::Deref;
-use serde_json::{Value, json};
-use crate::api::{CodexUsage, CoverageStatus, HarnessUsageSnapshot, UsageSnapshot};
 
+use serde_json::{Value, json};
+
+use crate::api::{CodexUsage, CoverageStatus, HarnessUsageSnapshot, UsageSnapshot};
 use crate::{
     CaptureDiagnostics, ExtractionDiagnostics, ExtractionOutcome, JsonlDiagnostics, JsonlLimits,
     JsonlReadStatus, ReasonCode, extract_codex, parse_jsonl,

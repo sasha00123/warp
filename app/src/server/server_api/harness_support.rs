@@ -8,14 +8,13 @@ use async_trait::async_trait;
 #[cfg(test)]
 use mockall::automock;
 
-#[path = "harness_usage.rs"]
-mod harness_usage;
-pub use harness_usage::{
-    HarnessUsageCapability, HarnessUsageError, HarnessUsageErrorKind,
-    HarnessUsagePublicationStatus,
-};
+#[path = "harness_usage/publication.rs"]
+mod publication;
 #[cfg(test)]
-use harness_usage::parse_harness_usage_retry_after;
+use publication::parse_harness_usage_retry_after;
+pub use publication::{
+    HarnessUsageCapability, HarnessUsageError, HarnessUsageErrorKind, HarnessUsagePublicationStatus,
+};
 
 use super::ServerApi;
 #[cfg(feature = "local_fs")]
@@ -259,7 +258,7 @@ pub struct ResolvedHarnessPrompt {
     pub context: Option<String>,
     #[serde(
         default,
-        deserialize_with = "harness_usage::deserialize_harness_usage_capability"
+        deserialize_with = "publication::deserialize_harness_usage_capability"
     )]
     pub harness_usage: Option<HarnessUsageCapability>,
 }

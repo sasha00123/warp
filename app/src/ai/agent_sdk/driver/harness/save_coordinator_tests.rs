@@ -9,12 +9,10 @@ use parking_lot::Mutex;
 use warpui::r#async::FutureExt as _;
 use warpui::r#async::executor::Background;
 
-use super::{
-    SaveCoordinator, SaveOperation, remaining_final_save_budget,
-};
+use super::{SaveCoordinator, SaveOperation, remaining_final_save_budget};
+use crate::ai::agent_sdk::driver::harness::SavePoint;
 use crate::ai::agent_sdk::driver::harness::harness_persistence::save_transcript_and_block;
 use crate::ai::agent_sdk::driver::harness::transcript_persistence::UploadedTranscriptUsage;
-use crate::ai::agent_sdk::driver::harness::SavePoint;
 
 #[tokio::test]
 async fn metrics_timeout_preserves_completed_persistence_and_drops_publication() {

@@ -2,10 +2,10 @@ use std::collections::BTreeSet;
 use std::mem;
 
 use serde_json::Value;
+
 use crate::api::{
     Attribution, CodexUsage, Coverage, HarnessUsageSnapshot, UsagePayload, UsageSnapshot,
 };
-
 use crate::claude::classification;
 use crate::counters::{Accounting, Counters};
 use crate::tools::Tools;
@@ -21,7 +21,6 @@ const PATHS: [&str; 5] = [
     "/reasoning_output_tokens",
     "/total_tokens",
 ];
-
 
 impl From<Counters<5>> for CodexUsage {
     fn from(counts: Counters<5>) -> Self {

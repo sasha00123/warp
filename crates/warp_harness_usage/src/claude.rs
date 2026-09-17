@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde_json::Value;
+
 use crate::api::{
     Attribution, CacheCreation, ClaudeUsage, Coverage, HarnessUsageSnapshot, UsagePayload,
     UsageSnapshot,
 };
-
 use crate::counters::{Accounting, Counters};
 use crate::tools::Tools;
 use crate::{
@@ -21,7 +21,6 @@ const PATHS: [&str; 6] = [
     "/cache_creation/ephemeral_5m_input_tokens",
     "/cache_creation/ephemeral_1h_input_tokens",
 ];
-
 
 impl From<Counters<6>> for ClaudeUsage {
     fn from(counts: Counters<6>) -> Self {

@@ -4,7 +4,8 @@ use std::path::Path;
 
 use tempfile::TempDir;
 use uuid::Uuid;
-use warp_harness_usage::{CoverageStatus, ExtractionOutcome, JsonlReadStatus, extract_claude};
+use warp_harness_usage::api::{CoverageStatus, HarnessUsageSnapshot};
+use warp_harness_usage::{ExtractionOutcome, JsonlReadStatus, extract_claude};
 
 use super::*;
 #[test]
@@ -28,10 +29,13 @@ fn captured_metrics_and_raw_bytes_share_records_before_late_append() {
         &filename,
         "{\"type\":\"assistant\",\"message\":{\"id\":\"b\",\"usage\":{\"input_tokens\":999}}}\n",
     );
-    let ExtractionOutcome::Usable(snapshot) =
+    let ExtractionOutcome::Usable(extracted) =
         extract_claude(&session.to_string(), &envelope.entries, [], &diagnostics)
     else {
         panic!("expected observed tokens");
+    };
+    let HarnessUsageSnapshot::ClaudeCode(snapshot) = extracted.snapshot else {
+        unreachable!()
     };
     assert_eq!(snapshot.coverage.token_status, CoverageStatus::Partial);
     assert_eq!(

@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{TimeZone, Utc};
+use futures::FutureExt as _;
 use futures::channel::oneshot;
 use futures::executor::block_on;
 use futures::future::{self, AbortHandle};
-use futures::FutureExt as _;
 use warp_harness_usage::{CaptureDiagnostics, JsonlDiagnostics, JsonlReadStatus, extract_claude};
 use warpui::r#async::executor::Background;
 
@@ -122,7 +122,16 @@ fn capture_allocation_preserves_pending_and_cannot_change_execution() {
     );
 
     assert_eq!((identity.execution_id, identity.sequence), (41, 2));
-    assert_eq!(reporter.state.lock().pending.as_ref().unwrap().capture_sequence, 1);
+    assert_eq!(
+        reporter
+            .state
+            .lock()
+            .pending
+            .as_ref()
+            .unwrap()
+            .capture_sequence,
+        1
+    );
     assert_eq!(reporter.begin_capture().unwrap().execution_id, 41);
 }
 
@@ -140,7 +149,16 @@ fn active_publication_allows_capture_and_keeps_only_the_latest_pending_request()
     reporter.stage_request(request(2), &background);
     reporter.stage_request(request(3), &background);
 
-    assert_eq!(reporter.state.lock().pending.as_ref().unwrap().capture_sequence, 3);
+    assert_eq!(
+        reporter
+            .state
+            .lock()
+            .pending
+            .as_ref()
+            .unwrap()
+            .capture_sequence,
+        3
+    );
     assert!(reporter.begin_capture().is_some());
 }
 

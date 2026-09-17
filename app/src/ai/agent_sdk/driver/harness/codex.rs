@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -26,13 +26,13 @@ use super::codex_transcript::{
     CodexResumeInfo, CodexTranscriptEnvelope, codex_sessions_root, find_session_file,
     parse_session_meta, rehydrate_codex_transcript,
 };
-use super::json_utils::read_json_file_or_default;
 use super::harness_persistence::{
     HarnessPersistence, PersistenceOutcome, save_transcript_and_block,
 };
+use super::json_utils::read_json_file_or_default;
 use super::transcript_persistence::{
-    CapturedTranscript, capture_transcript_with_retry, needs_capture_retry, read_jsonl_capture,
-    upload_captured_transcript, UploadedTranscriptUsage,
+    CapturedTranscript, UploadedTranscriptUsage, capture_transcript_with_retry,
+    needs_capture_retry, read_jsonl_capture, upload_captured_transcript,
 };
 use super::usage_reporting::CaptureIdentity;
 use super::{
@@ -322,9 +322,8 @@ impl CodexHarnessRunner {
         is_final: bool,
         foreground: &ModelSpawner<AgentDriver>,
     ) -> Result<UploadedTranscriptUsage> {
-        let capture = capture_transcript_with_retry(
-            self.persistence.is_reporting_enabled(),
-            || async {
+        let capture =
+            capture_transcript_with_retry(self.persistence.is_reporting_enabled(), || async {
                 self.handle_session_update(foreground).await?;
                 let Some(session_id) = self.session_id.get().copied() else {
                     return Ok(None);
@@ -339,9 +338,8 @@ impl CodexHarnessRunner {
                 .await
                 .context("Native transcript capture task failed")?
                 .map(Some)
-            },
-        )
-        .await?;
+            })
+            .await?;
         let Some(capture) = capture else {
             if is_final {
                 log::warn!(
@@ -490,13 +488,19 @@ impl HarnessRunner for CodexHarnessRunner {
             && !super::has_running_cli_agent(&self.terminal_driver, foreground).await
         {
             log::debug!("Will not save conversation, Codex not in progress");
-            return PersistenceOutcome::block_only(Ok(()));
+            return PersistenceOutcome::skipped();
         }
 
         let (conversation_id, block_id) = match &*self.state.lock() {
             CodexRunnerState::Preexec => {
                 log::warn!("save_conversation called before start");
-                return PersistenceOutcome::block_only(Ok(()));
+                return if matches!(save_point, SavePoint::Final) {
+                    PersistenceOutcome::failed(anyhow!(
+                        "Cannot finalize Codex persistence before the harness starts"
+                    ))
+                } else {
+                    PersistenceOutcome::skipped()
+                };
             }
             CodexRunnerState::Running {
                 conversation_id,

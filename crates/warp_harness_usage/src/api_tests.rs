@@ -52,10 +52,7 @@ fn requests_match_contract_fixtures() {
             }],
             tool_calls: Some(ToolCalls {
                 total: 2,
-                by_name: BTreeMap::from([
-                    ("Read".into(), 1),
-                    ("mcp__test__lookup".into(), 1),
-                ]),
+                by_name: BTreeMap::from([("Read".into(), 1), ("mcp__test__lookup".into(), 1)]),
             }),
         },
     }));

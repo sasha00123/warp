@@ -67,7 +67,6 @@ pub enum HarnessUsagePublicationStatus {
     Idempotent,
 }
 
-
 /// Determines whether publication may retry or should stop for this execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HarnessUsageErrorKind {
@@ -148,7 +147,6 @@ impl HarnessUsageError {
         }
     }
 }
-
 
 pub(super) fn parse_harness_usage_retry_after(value: &str, now: DateTime<Utc>) -> Option<Duration> {
     value
@@ -231,7 +229,3 @@ impl ServerApi {
         Ok(acknowledgment.status)
     }
 }
-
-#[cfg(test)]
-#[path = "harness_usage_wire_tests.rs"]
-mod tests;
