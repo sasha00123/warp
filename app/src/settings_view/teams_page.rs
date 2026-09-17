@@ -1310,8 +1310,8 @@ impl TeamsPageView {
         }
     }
 
-    /// The confirmation shown when a workspace admin removes a member from a team of a native
-    /// workspace. Returns `None` for anything else, letting the caller keep its legacy behavior.
+    /// Native-workspace confirmation for removing a member from a team. Returns None when the
+    /// workspace is not native or the member is missing from the team roster.
     fn remove_user_from_team_confirmation_variant(
         workspace: &Workspace,
         team: &Team,

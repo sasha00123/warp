@@ -655,32 +655,6 @@ fn active_member_is_not_flagged_disabled() {
 }
 
 #[test]
-fn workspace_admin_on_native_workspace_sees_remove_from_workspace() {
-    let team = team_with_members(
-        vec![
-            member(MEMBER_EMAIL, MembershipRole::User),
-            member("other@example.com", MembershipRole::User),
-        ],
-        true,
-    );
-    let mut workspace = admin_workspace(MEMBER_EMAIL);
-    workspace
-        .members
-        .push(workspace_member("other@example.com", MembershipRole::User));
-
-    let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
-
-    assert_eq!(
-        action_labels(&items, "other@example.com"),
-        vec![
-            "Promote to admin",
-            "Remove from team",
-            "Remove from workspace"
-        ]
-    );
-}
-
-#[test]
 fn team_only_admin_does_not_see_remove_from_workspace() {
     let team = team_with_members(
         vec![
@@ -689,12 +663,16 @@ fn team_only_admin_does_not_see_remove_from_workspace() {
         ],
         true,
     );
-    let workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::User, true);
+    let mut workspace = workspace_with_member(ADMIN_EMAIL, MembershipRole::User, true);
+    workspace
+        .members
+        .push(workspace_member("other@example.com", MembershipRole::User));
 
     let items = TeamsPageView::team_to_item_list(&team, ADMIN_EMAIL, &workspace);
 
-    assert!(
-        !action_labels(&items, "other@example.com").contains(&"Remove from workspace".to_string())
+    assert_eq!(
+        action_labels(&items, "other@example.com"),
+        vec!["Promote to admin", "Remove from team"]
     );
 }
 
@@ -707,12 +685,16 @@ fn non_native_workspace_does_not_show_remove_from_workspace() {
         ],
         true,
     );
-    let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::Admin, false);
+    let mut workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::Admin, false);
+    workspace
+        .members
+        .push(workspace_member("other@example.com", MembershipRole::User));
 
     let items = TeamsPageView::team_to_item_list(&team, MEMBER_EMAIL, &workspace);
 
-    assert!(
-        !action_labels(&items, "other@example.com").contains(&"Remove from workspace".to_string())
+    assert_eq!(
+        action_labels(&items, "other@example.com"),
+        vec!["Promote to admin", "Remove from team"]
     );
 }
 
@@ -781,12 +763,14 @@ fn non_native_workspace_team_removal_keeps_the_legacy_confirmation() {
     team.uid = 7.into();
     let workspace = workspace_with_member(MEMBER_EMAIL, MembershipRole::Admin, false);
 
-    assert!(TeamsPageView::remove_user_from_team_confirmation_variant(
-        &workspace,
-        &team,
-        UserUid::new(MEMBER_EMAIL)
-    )
-    .is_none());
+    assert!(
+        TeamsPageView::remove_user_from_team_confirmation_variant(
+            &workspace,
+            &team,
+            UserUid::new(MEMBER_EMAIL)
+        )
+        .is_none()
+    );
 }
 
 #[cfg(not(target_family = "wasm"))]
