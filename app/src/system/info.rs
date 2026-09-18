@@ -19,9 +19,8 @@ use crate::{TelemetryEvent, send_telemetry_from_app_ctx, send_telemetry_sync_fro
 /// The threshold at which we emit a memory usage warning, in bytes.
 const MEMORY_USAGE_WARNING_THRESHOLD_BYTES: u64 = Byte::GIGABYTE.as_u64() * 10;
 
-/// The number of foreground-task spawn sites to include (ranked by live task
-/// count) when attaching the task census to an excessive-memory Sentry
-/// event.
+/// The number of foreground-task spawn sites to include per ranking when
+/// attaching the task census to an excessive-memory Sentry event.
 #[cfg(feature = "heap_usage_tracking")]
 const TOP_N_FOREGROUND_SPAWN_SITES: usize = 20;
 

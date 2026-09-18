@@ -1215,7 +1215,7 @@ fn test_spawn_stream_local_from_view() {
 fn spawn_sites_in_this_file(app: &mut App) -> Vec<String> {
     let snapshot = app.update(|ctx| ctx.foreground_executor().task_census_snapshot(50));
     let mut sites: Vec<String> = snapshot
-        .top_spawn_sites
+        .top_sites_by_live_tasks
         .into_iter()
         .map(|site| site.location)
         .filter(|location| location.contains("mod_tests.rs"))

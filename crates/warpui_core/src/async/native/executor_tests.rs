@@ -21,8 +21,8 @@ fn spawn_is_attributed_to_the_caller_not_the_executor() {
 
     let snapshot = foreground.task_census_snapshot(10);
     assert_eq!(snapshot.total_live_tasks, 1);
-    assert_eq!(snapshot.top_spawn_sites.len(), 1);
-    let site = &snapshot.top_spawn_sites[0];
+    assert_eq!(snapshot.top_sites_by_live_tasks.len(), 1);
+    let site = &snapshot.top_sites_by_live_tasks[0];
     // The recorded location should be this test file (the call above), not
     // `executor.rs` -- otherwise every spawn site in the app would collapse
     // into one bucket, defeating the point of the census.
@@ -55,12 +55,12 @@ fn distinct_call_sites_are_tracked_and_ranked_separately() {
 
     let snapshot = foreground.task_census_snapshot(10);
     assert_eq!(snapshot.total_live_tasks, 6);
-    assert_eq!(snapshot.top_spawn_sites.len(), 2);
-    assert_eq!(snapshot.top_spawn_sites[0].live_tasks, 5);
-    assert_eq!(snapshot.top_spawn_sites[0].total_spawned, 5);
-    assert_eq!(snapshot.top_spawn_sites[1].live_tasks, 1);
+    assert_eq!(snapshot.top_sites_by_live_tasks.len(), 2);
+    assert_eq!(snapshot.top_sites_by_live_tasks[0].live_tasks, 5);
+    assert_eq!(snapshot.top_sites_by_live_tasks[0].total_spawned, 5);
+    assert_eq!(snapshot.top_sites_by_live_tasks[1].live_tasks, 1);
     assert_ne!(
-        snapshot.top_spawn_sites[0].location, snapshot.top_spawn_sites[1].location,
+        snapshot.top_sites_by_live_tasks[0].location, snapshot.top_sites_by_live_tasks[1].location,
         "the two call sites must be attributed separately"
     );
 
@@ -77,8 +77,8 @@ fn snapshot_respects_the_requested_limit() {
 
     let snapshot = foreground.task_census_snapshot(1);
     assert_eq!(snapshot.total_live_tasks, 3);
-    assert_eq!(snapshot.top_spawn_sites.len(), 1);
-    assert_eq!(snapshot.top_spawn_sites[0].live_tasks, 3);
+    assert_eq!(snapshot.top_sites_by_live_tasks.len(), 1);
+    assert_eq!(snapshot.top_sites_by_live_tasks[0].live_tasks, 3);
 
     for task in tasks {
         task.detach();
@@ -95,7 +95,33 @@ fn completing_a_task_decrements_the_live_count() {
 
     let snapshot = foreground.task_census_snapshot(10);
     assert_eq!(snapshot.total_live_tasks, 0);
-    assert!(snapshot.top_spawn_sites.is_empty());
+    assert!(snapshot.top_sites_by_live_tasks.is_empty());
+}
+
+#[test]
+fn a_site_whose_tasks_all_completed_still_reports_its_churn() {
+    // The shape this ranking exists for: work that finishes promptly but
+    // leaves retained allocations behind holds no live tasks, so it is
+    // absent from the live-count ranking entirely.
+    let foreground = Foreground::test();
+    for _ in 0..4 {
+        block_on(foreground.run(foreground.spawn(async {})));
+    }
+
+    let snapshot = foreground.task_census_snapshot(10);
+    assert_eq!(snapshot.total_live_tasks, 0);
+    assert!(snapshot.top_sites_by_live_tasks.is_empty());
+
+    assert_eq!(snapshot.total_spawned_tasks, 4);
+    assert_eq!(snapshot.top_sites_by_total_spawned.len(), 1);
+    let site = &snapshot.top_sites_by_total_spawned[0];
+    assert_eq!(site.total_spawned, 4);
+    assert_eq!(site.live_tasks, 0);
+    assert!(
+        site.location.contains("executor_tests.rs"),
+        "expected the spawning test file in the location, got {}",
+        site.location
+    );
 }
 
 #[test]

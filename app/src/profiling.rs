@@ -124,12 +124,12 @@ pub async fn dump_jemalloc_heap_profile(
                         );
                     }
 
-                    // Attach the live foreground-task census as its own
-                    // context, alongside the memory breakdown. When the
-                    // profile's own frames dead-end in the executor's boxed
-                    // `Future::poll` (every main-thread task looks the same
-                    // there), this names the call sites actually holding
-                    // tasks open.
+                    // Attach the foreground-task census as its own context,
+                    // alongside the memory breakdown. When the profile's own
+                    // frames dead-end in the executor's boxed `Future::poll`
+                    // (every main-thread task looks the same there), this
+                    // names the call sites behind the memory: those holding
+                    // tasks open, and those merely churning through them.
                     if let Ok(serde_json::Value::Object(map)) =
                         serde_json::to_value(&foreground_task_census)
                     {
