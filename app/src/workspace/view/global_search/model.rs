@@ -21,12 +21,15 @@ use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, ModelContext, ModelSpawner, SingletonEntity};
 
 use crate::workspace::view::global_search::view::GlobalSearchEvent;
-use crate::workspace::view::global_search::{GlobalSearchMatch, SearchConfig};
+use crate::workspace::view::global_search::{GlobalSearchMatch, SearchConfig, SharedMatchText};
 
 const START_BATCH_AFTER_COUNT: usize = 50;
 const MAX_BATCH_SIZE: usize = 512;
 const MAX_BATCH_AGE_MS: u64 = 4000;
 pub(super) const MAX_STORED_LINE_TEXT_BYTES: usize = 4096;
+/// Each expanded row carries unique path and submatch metadata. This retains ample navigation
+/// targets while bounding the synchronous work and metadata allocated for any one matched line.
+const MAX_SUBMATCHES_PER_LINE: usize = 100;
 
 /// Client-requested cap on remote matches per host. The daemon clamps this
 /// to its own server-side cap; both bound the single-frame response size.
@@ -336,7 +339,7 @@ impl GlobalSearch {
                     location: LocalOrRemotePath::Remote(RemotePath::new(host_id.clone(), path)),
                     line_number: m.line_number,
                     column_num: None,
-                    line_text: m.line_text,
+                    line_text: m.line_text.into(),
                     submatches,
                 })
             })
@@ -481,7 +484,7 @@ impl GlobalSearch {
             location: LocalOrRemotePath::Local(m.file_path),
             line_number: m.line_number,
             column_num: None,
-            line_text: m.line_text,
+            line_text: m.line_text.into(),
             submatches: m.submatches,
         }
     }
@@ -494,7 +497,7 @@ impl GlobalSearch {
             let submatch = m.submatches.into_iter().next();
             let column_num = Self::column_from_submatch(&m.line_text, submatch.as_ref());
             return vec![Self::trim_leading_whitespace_for_submatch(
-                &m.line_text,
+                m.line_text,
                 m.location,
                 m.line_number,
                 column_num,
@@ -504,10 +507,11 @@ impl GlobalSearch {
 
         m.submatches
             .into_iter()
+            .take(MAX_SUBMATCHES_PER_LINE)
             .map(|sub| {
                 let column_num = Self::column_from_submatch(&m.line_text, Some(&sub));
                 Self::trim_leading_whitespace_for_submatch(
-                    &m.line_text,
+                    m.line_text.clone(),
                     m.location.clone(),
                     m.line_number,
                     column_num,
@@ -529,7 +533,7 @@ impl GlobalSearch {
     /// Trim leading whitespace from a line up to the given submatch,
     /// adjusting the submatch offset accordingly.
     fn trim_leading_whitespace_for_submatch(
-        original_line: &str,
+        original_line: SharedMatchText,
         location: LocalOrRemotePath,
         line_number: u32,
         column_num: Option<usize>,
@@ -568,7 +572,7 @@ impl GlobalSearch {
             location,
             line_number,
             column_num,
-            line_text,
+            line_text: line_text.into(),
             submatches,
         }
     }

@@ -9,7 +9,10 @@ use warp_ripgrep::search::Submatch;
 use warp_util::local_or_remote_path::LocalOrRemotePath;
 use warpui::App;
 
-use super::{ActiveSearch, GlobalSearch, MAX_STORED_LINE_TEXT_BYTES, SearchSource, SourceResult};
+use super::{
+    ActiveSearch, GlobalSearch, MAX_STORED_LINE_TEXT_BYTES, MAX_SUBMATCHES_PER_LINE, SearchSource,
+    SourceResult,
+};
 use crate::workspace::view::global_search::GlobalSearchMatch;
 use crate::workspace::view::global_search::view::GlobalSearchEvent;
 
@@ -61,7 +64,7 @@ fn remote_matches_become_remote_locations_on_the_host() {
     }
     assert_eq!(results[0].line_number, 7);
     assert_eq!(results[0].column_num, Some(4));
-    assert_eq!(results[0].line_text, "fn main() {}");
+    assert_eq!(&*results[0].line_text, "fn main() {}");
 }
 
 #[test]
@@ -110,7 +113,7 @@ fn remote_match_leading_whitespace_is_trimmed_per_submatch() {
     let results = GlobalSearch::remote_matches_to_global(&host(), success);
 
     assert_eq!(results.len(), 1);
-    assert_eq!(results[0].line_text, "foo");
+    assert_eq!(&*results[0].line_text, "foo");
     assert_eq!(results[0].column_num, Some(5));
     assert_eq!(results[0].submatches[0].byte_start.as_usize(), 0);
     assert_eq!(results[0].submatches[0].byte_end.as_usize(), 3);
@@ -139,7 +142,7 @@ fn expanded_matches_are_bounded_before_batching() {
         location: LocalOrRemotePath::Local(PathBuf::from("/repo/a.rs")),
         line_number: 7,
         column_num: None,
-        line_text,
+        line_text: line_text.into(),
         submatches: vec![Submatch {
             byte_start: ByteOffset::from(match_start),
             byte_end: ByteOffset::from(match_end),
@@ -198,4 +201,47 @@ fn local_heap_limit_status_marks_the_completed_search_as_capped() {
 
         assert!(receiver.await.unwrap());
     });
+}
+
+#[test]
+fn remote_matches_cap_submatches_expanded_from_one_line() {
+    let success = RipgrepSearchSuccess {
+        matches: vec![proto_match(
+            "/repo/a.rs",
+            1,
+            "x",
+            vec![(0, 1); MAX_SUBMATCHES_PER_LINE + 1],
+        )],
+        capped: false,
+    };
+
+    let results = GlobalSearch::remote_matches_to_global(&host(), success);
+
+    assert_eq!(results.len(), MAX_SUBMATCHES_PER_LINE);
+}
+
+#[test]
+fn expanded_submatches_share_trimmed_line_storage() {
+    let success = RipgrepSearchSuccess {
+        matches: vec![proto_match(
+            "/repo/a.rs",
+            1,
+            "    foo bar",
+            vec![(4, 7), (8, 11)],
+        )],
+        capped: false,
+    };
+
+    let results = GlobalSearch::remote_matches_to_global(&host(), success);
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(&*results[0].line_text, "foo bar");
+    assert_eq!(&*results[1].line_text, "foo bar");
+    assert_eq!(results[0].column_num, Some(5));
+    assert_eq!(results[1].column_num, Some(9));
+    assert_eq!(results[0].submatches[0].byte_start.as_usize(), 0);
+    assert_eq!(results[0].submatches[0].byte_end.as_usize(), 3);
+    assert_eq!(results[1].submatches[0].byte_start.as_usize(), 4);
+    assert_eq!(results[1].submatches[0].byte_end.as_usize(), 7);
+    assert_eq!(results[0].line_text.as_ptr(), results[1].line_text.as_ptr());
 }
