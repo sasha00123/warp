@@ -83,24 +83,92 @@ fn test_server_delinquent_maps_to_delinquency_alert() {
 }
 
 #[test]
-fn test_server_spend_limit_reasons_map_to_spend_limit_alert() {
+fn test_server_spend_limit_reasons_preserve_scope() {
     App::test((), |mut app| async move {
         initialize_app(&mut app);
-        for reason in [
-            AICreditDenialReason::EnterpriseTeamSpendLimitHit,
-            AICreditDenialReason::EnterprisePerUserSpendLimitHit,
-            AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit,
-        ] {
-            apply_server_availability(&mut app, AICreditAvailability::unavailable(reason));
-            assert_eq!(
-                determine_state(&mut app),
-                PromptAlertState::MonthlyOveragesSpendLimitReached,
-                "unexpected alert state for {reason:?}",
-            );
-        }
+
+        apply_server_availability(
+            &mut app,
+            AICreditAvailability::unavailable(AICreditDenialReason::EnterpriseTeamSpendLimitHit),
+        );
+        assert_eq!(
+            determine_state(&mut app),
+            PromptAlertState::EnterpriseTeamSpendLimitReached
+        );
+
+        apply_server_availability(
+            &mut app,
+            AICreditAvailability::unavailable(AICreditDenialReason::EnterprisePerUserSpendLimitHit),
+        );
+        assert_eq!(
+            determine_state(&mut app),
+            PromptAlertState::EnterpriseIndividualSpendLimitReached
+        );
+
+        apply_server_availability(
+            &mut app,
+            AICreditAvailability::unavailable(
+                AICreditDenialReason::EnterpriseWorkspaceSpendLimitHit,
+            ),
+        );
+        assert_eq!(
+            determine_state(&mut app),
+            PromptAlertState::EnterpriseWorkspaceSpendLimitReached
+        );
     });
 }
 
+#[test]
+fn test_spend_limit_presentation_identifies_scope() {
+    assert_eq!(
+        PromptAlertState::MonthlyOveragesSpendLimitReached.primary_text(),
+        "You've reached your monthly spend limit"
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseTeamSpendLimitReached.primary_text(),
+        "You've reached your team's spend limit"
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseIndividualSpendLimitReached.primary_text(),
+        "You've reached your individual spend limit"
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseWorkspaceSpendLimitReached.primary_text(),
+        "You've reached this workspace's spend limit"
+    );
+}
+
+#[test]
+fn test_spend_limit_tooltips_identify_scope() {
+    assert_eq!(
+        PromptAlertState::EnterpriseTeamSpendLimitReached.tooltip_text(),
+        Some("You've reached your team's spend limit")
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseIndividualSpendLimitReached.tooltip_text(),
+        Some("You've reached your individual spend limit")
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseWorkspaceSpendLimitReached.tooltip_text(),
+        Some("You've reached this workspace's spend limit")
+    );
+}
+
+#[test]
+fn test_spend_limit_non_admin_ctas_name_relevant_admin() {
+    assert_eq!(
+        PromptAlertState::EnterpriseTeamSpendLimitReached.enterprise_non_admin_cta_text(),
+        Some(", contact a team admin")
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseIndividualSpendLimitReached.enterprise_non_admin_cta_text(),
+        Some(", contact an admin")
+    );
+    assert_eq!(
+        PromptAlertState::EnterpriseWorkspaceSpendLimitReached.enterprise_non_admin_cta_text(),
+        Some(", contact a workspace admin")
+    );
+}
 #[test]
 fn test_server_out_of_credits_maps_to_request_limit_reached() {
     App::test((), |mut app| async move {
