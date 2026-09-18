@@ -62,6 +62,7 @@ use crate::features::FeatureFlag;
 use crate::menu::{Event as MenuEvent, Menu, MenuItemFields, MenuVariant};
 use crate::server::experiments::{ServerExperiments, ServerExperimentsEvent};
 use crate::server::server_api::ServerApiProvider;
+use crate::server::team_scope::RequestTeamScope;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::view_components::action_button::{ButtonSize, KeystrokeSource, NakedTheme};
@@ -71,6 +72,9 @@ use crate::view_components::compactible_action_button::{
 use crate::view_components::compactible_split_action_button::CompactibleSplitActionButton;
 use crate::view_components::dropdown::DropdownEvent;
 use crate::view_components::{FilterableDropdownEvent, FilterableDropdownOrientation};
+use crate::workspaces::user_workspaces::{
+    TeamContextResolver, TeamScope, UserWorkspaces, UserWorkspacesEvent,
+};
 
 const RUN_AGENTS_CARD_TITLE: &str = "Can I start additional agents for this task?";
 const SPAWN_AGENTS_CANCELLED_LABEL: &str = "Spawn agents cancelled";
@@ -270,6 +274,7 @@ pub struct RunAgentsCardView {
     runners: Vec<(String, String)>,
     /// True while the `getRunners` fetch is in flight.
     runners_loading: bool,
+    team_context_resolver: TeamContextResolver,
 }
 
 /// Resolves UI-only interactive defaults on edit state that has
@@ -283,7 +288,7 @@ pub struct RunAgentsCardView {
 fn resolve_interactive_defaults(
     orchestration_config_state: &mut OrchestrationConfigState,
     block_model: &dyn AIBlockModel<View = AIBlock>,
-    ctx: &AppContext,
+    ctx: &ViewContext<RunAgentsCardView>,
 ) {
     if orchestration_config_state.model_id.is_empty() {
         let harness = warp_cli::agent::Harness::parse_orchestration_harness(
@@ -308,7 +313,8 @@ fn resolve_interactive_defaults(
             // over the bare "warp" fallback so self-hosted teams see
             // their default pre-selected. Mirrors the Oz webapp's
             // `HostSelector` initial-selection behavior.
-            let default_host = oc::resolve_default_host_slug(ctx)
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_view(ctx);
+            let default_host = oc::resolve_default_host_slug(&scope, ctx)
                 .unwrap_or_else(|| oc::ORCHESTRATION_WARP_WORKER_HOST.to_string());
             orchestration_config_state.set_worker_host(default_host);
         }
@@ -481,13 +487,10 @@ impl RunAgentsCardView {
 
         // Repopulate pickers when the server-provided harness list,
         // harness model catalogs, or per-harness auth secrets change.
-        // Without an `AuthSecretsLoaded` handler the picker stays on
-        // "Loading…" forever after the lazy fetch completes.
         ctx.subscribe_to_model(
             &HarnessAvailabilityModel::handle(ctx),
             |me, _, event, ctx| match event {
                 HarnessAvailabilityEvent::AuthSecretCreated { harness, name } => {
-                    // Adopt the new secret before repopulating the picker.
                     oc::apply_created_auth_secret_if_matches(
                         &mut me.orchestration_edit_state.orchestration_config_state,
                         *harness,
@@ -503,12 +506,7 @@ impl RunAgentsCardView {
                     ctx.notify();
                 }
                 HarnessAvailabilityEvent::Changed
-                | HarnessAvailabilityEvent::AuthSecretsLoaded
-                | HarnessAvailabilityEvent::AuthSecretsFetchFailed
-                | HarnessAvailabilityEvent::AuthSecretDeleted { .. } => {
-                    // Repopulate even on fetch failure to replace "Loading…".
-                    // Deleted events also force a repopulate so this card
-                    // stops surfacing the deleted secret as an option.
+                | HarnessAvailabilityEvent::AuthSecretsChanged => {
                     oc::repopulate_all_pickers(
                         &mut me.orchestration_edit_state.orchestration_config_state,
                         &me.handles.pickers,
@@ -519,6 +517,7 @@ impl RunAgentsCardView {
                     ctx.notify();
                 }
                 HarnessAvailabilityEvent::AuthSecretCreationFailed { .. }
+                | HarnessAvailabilityEvent::AuthSecretDeleted { .. }
                 | HarnessAvailabilityEvent::AuthSecretDeletionFailed { .. } => {}
             },
         );
@@ -547,6 +546,31 @@ impl RunAgentsCardView {
                 }
             },
         );
+        ctx.subscribe_to_model(&UserWorkspaces::handle(ctx), |me, _, event, ctx| {
+            let affects_this_window = matches!(event, UserWorkspacesEvent::TeamsChanged)
+                || matches!(
+                    event,
+                    UserWorkspacesEvent::WindowTeamChanged { window_id }
+                        if *window_id == ctx.window_id()
+                );
+            if !affects_this_window {
+                return;
+            }
+            me.orchestration_edit_state
+                .orchestration_config_state
+                .auth_secret_selection = AuthSecretSelection::Unset;
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(&scope, ctx);
+            });
+            oc::repopulate_all_pickers(
+                &mut me.orchestration_edit_state.orchestration_config_state,
+                &me.handles.pickers,
+                ctx,
+            );
+            me.refresh_accept_button_state(ctx);
+            ctx.notify();
+        });
         // When auto_launched is true, execution is deferred to the
         // ActionBlockedOnUserConfirmation subscription above — the action
         // hasn't been queued in pending_actions yet at construction time.
@@ -573,11 +597,12 @@ impl RunAgentsCardView {
             has_auto_opened_create_modal: false,
             runners: Vec::new(),
             runners_loading: false,
+            team_context_resolver: UserWorkspaces::team_context_resolver(ctx.handle()),
         };
 
         view.ensure_pickers(ctx);
         view.refresh_accept_button_state(ctx);
-        // No-ops if secrets are still in flight; the `AuthSecretsLoaded`
+        // No-ops if secrets are still in flight; the `AuthSecretsChanged`
         // subscription will retry once they resolve.
         view.maybe_auto_open_create_modal(ctx);
 
@@ -629,8 +654,10 @@ impl RunAgentsCardView {
             new_state.orchestration_config_state.auth_secret_selection,
             AuthSecretSelection::Unset
         ) {
+            let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
             new_state.orchestration_config_state.auth_secret_selection =
                 oc::resolve_auth_secret_selection_for_harness(
+                    &team_scope,
                     &new_state.orchestration_config_state.harness_type,
                     ctx,
                 );
@@ -821,9 +848,10 @@ impl RunAgentsCardView {
             return;
         };
         // Only auto-open on `Loaded([])`. Other fetch states are
-        // ambiguous; the `AuthSecretsLoaded` subscription will retry.
+        // ambiguous; the `AuthSecretsChanged` subscription will retry.
+        let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
         let has_zero_loaded = matches!(
-            HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(harness),
+            HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(&team_scope, harness),
             AuthSecretFetchState::Loaded(secrets) if secrets.is_empty()
         );
         if !has_zero_loaded {
@@ -919,6 +947,10 @@ impl RunAgentsCardView {
 
         let state = &self.orchestration_edit_state.orchestration_config_state;
         if self.handles.pickers.host_picker.is_none() {
+            let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
+            ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
+                model.refresh(&scope, ctx);
+            });
             let initial_host = match &state.execution_mode {
                 RunAgentsExecutionMode::Remote { worker_host, .. } => worker_host.as_str(),
                 RunAgentsExecutionMode::Local => oc::ORCHESTRATION_WARP_WORKER_HOST,
@@ -936,8 +968,9 @@ impl RunAgentsCardView {
             oc::populate_host_picker(&handle, initial_host, ctx);
             ctx.subscribe_to_view(&handle, |me, _, event, ctx| match event {
                 HostPickerEvent::Opened => {
+                    let scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                     ConnectedSelfHostedWorkersModel::handle(ctx).update(ctx, |model, ctx| {
-                        model.refresh(ctx);
+                        model.refresh(&scope, ctx);
                     });
                 }
                 HostPickerEvent::HostChanged { slug } => {
@@ -963,9 +996,11 @@ impl RunAgentsCardView {
                     .auth_secret_selection,
                 AuthSecretSelection::Unset
             ) {
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 self.orchestration_edit_state
                     .orchestration_config_state
                     .auth_secret_selection = oc::resolve_auth_secret_selection_for_harness(
+                    &team_scope,
                     &self
                         .orchestration_edit_state
                         .orchestration_config_state
@@ -1054,8 +1089,15 @@ impl RunAgentsCardView {
         }
         self.runners_loading = true;
         let client = ServerApiProvider::as_ref(ctx).get_factory_client();
+        let team_scope = RequestTeamScope::from_scope(
+            &UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx),
+        );
         ctx.spawn(
-            async move { client.get_runners(Some(RunnerSortBy::Name)).await },
+            async move {
+                client
+                    .get_runners(Some(RunnerSortBy::Name), Some(team_scope))
+                    .await
+            },
             |me, result, ctx| {
                 me.runners_loading = false;
                 match result {
@@ -1281,6 +1323,7 @@ impl View for RunAgentsCardView {
             &self.card,
             &self.handles,
             is_blocked,
+            &(self.team_context_resolver)(app),
             app,
         );
 
@@ -1417,9 +1460,10 @@ impl TypedActionView for RunAgentsCardView {
                 ctx.notify();
             }
             RunAgentsCardViewAction::AuthSecretChanged { auth_secret_name } => {
+                let team_scope = UserWorkspaces::as_ref(ctx).team_context_for_operation(ctx);
                 self.orchestration_edit_state
                     .orchestration_config_state
-                    .apply_auth_secret_change(auth_secret_name.clone(), ctx);
+                    .apply_auth_secret_change(&team_scope, auth_secret_name.clone(), ctx);
                 self.refresh_accept_button_state(ctx);
                 ctx.notify();
             }
@@ -1450,6 +1494,7 @@ fn render_confirmation_card(
     card: &RunAgentsCardFields,
     handles: &RunAgentsCardHandles,
     is_blocked: bool,
+    scope: &(impl TeamScope + ?Sized),
     app: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(app);
@@ -1463,7 +1508,12 @@ fn render_confirmation_card(
         .with_child(header)
         .with_child(body);
 
-    content.add_child(render_editor(orchestration_config_state, handles, app));
+    content.add_child(render_editor(
+        orchestration_config_state,
+        handles,
+        scope,
+        app,
+    ));
 
     let border_color = if is_blocked {
         theme.accent()
@@ -1745,6 +1795,7 @@ fn render_status_only_card(
 fn render_editor(
     orchestration_config_state: &OrchestrationConfigState,
     handles: &RunAgentsCardHandles,
+    scope: &(impl TeamScope + ?Sized),
     app: &AppContext,
 ) -> Box<dyn Element> {
     use warpui::elements::ConstrainedBox;
@@ -1785,9 +1836,13 @@ fn render_editor(
             theme.ui_error_color(),
             appearance,
         ));
-    } else if let Some(message) =
-        oc::empty_env_recommendation_message(&orchestration_config_state.execution_mode, app)
-    {
+    } else if let Some(message) = oc::empty_env_recommendation_message(
+        &orchestration_config_state.execution_mode,
+        oc::environment_snapshot(orchestration_config_state, scope, app)
+            .rows
+            .iter()
+            .any(|row| !row.id.is_empty()),
+    ) {
         column.add_child(oc::render_validation_error(
             message,
             theme.ui_warning_color(),

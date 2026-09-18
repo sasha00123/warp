@@ -35,15 +35,26 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             uid
             email
             role
+            isDisabled
           }
           teams {
             uid
             name
+            inviteLink
             members {
               uid
               email
               role
+              isDisabled
             }
+            visibility
+            featureModelChoice { ... }
+          }
+          openTeams {
+            teamUid
+            numMembers
+            name
+            teamAcceptingInvites
           }
           billingMetadata {
             customerType
@@ -167,10 +178,10 @@ query GetWorkspacesMetadataForUser($requestContext: RequestContext!) {
             }
           }
           hasBillingHistory
-          inviteCode
           pendingEmailInvites {
             email
             expired
+            teamUid
           }
           inviteLinkDomainRestrictions {
             uid

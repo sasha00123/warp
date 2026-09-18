@@ -31,6 +31,7 @@ use crate::ai::skills::resolve_skill_spec;
 use crate::ai::skills::{SkillManager, SkillReference};
 use crate::server::server_api::ai::{AgentConfigSnapshot, SpawnAgentRequest};
 use crate::server::server_api::{AIApiError, ClientError, CloudAgentCapacityError};
+use crate::server::team_scope::RequestTeamScope;
 use crate::settings::PrivacySettings;
 use crate::workspaces::user_workspaces::UserWorkspaces;
 use crate::workspaces::workspace::AdminEnablementSetting;
@@ -104,25 +105,17 @@ pub struct PreparedRemoteChildLaunch {
 }
 
 /// Failure while constructing the remote child request, before calling the server.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PrepareRemoteChildLaunchError {
+    #[error("Remote child agents require the parent run_id to be available.")]
     MissingParentRunId,
+    #[error("Failed to resolve child agent skills: {}", references.join(", "))]
     UnresolvedSkills { references: Vec<String> },
 }
 
 impl PrepareRemoteChildLaunchError {
     pub fn user_message(&self) -> String {
-        match self {
-            Self::MissingParentRunId => {
-                "Remote child agents require the parent run_id to be available.".to_string()
-            }
-            Self::UnresolvedSkills { references } => {
-                format!(
-                    "Failed to resolve child agent skills: {}",
-                    references.join(", ")
-                )
-            }
-        }
+        self.to_string()
     }
 }
 
@@ -235,6 +228,7 @@ pub enum CloudAgentStartupIssue {
 pub fn prepare_remote_child_launch(
     request: &StartAgentRequest,
     config: RemoteChildLaunchConfig,
+    team_scope: RequestTeamScope,
     ctx: &AppContext,
 ) -> Result<PreparedRemoteChildLaunch, PrepareRemoteChildLaunchError> {
     let orchestration_harness = config.orchestration_harness();
@@ -301,7 +295,7 @@ pub fn prepare_remote_child_launch(
             ..Default::default()
         }),
         title: (!title.is_empty()).then_some(title),
-        team: None,
+        team: Some(team_scope.team_uid().is_some()),
         skill: None,
         attachments: Vec::new(),
         interactive: Some(true),

@@ -27,6 +27,7 @@ use warp_cli::agent::Harness;
 use warp_core::command::ExitCode;
 use warp_core::context_flag::ContextFlag;
 use warp_errors::report_if_error;
+use warp_terminal::focus_env::add_session_focus_env_vars;
 use warp_terminal::shell::{ShellName, ShellType};
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
@@ -64,7 +65,7 @@ use crate::ai::blocklist::{BlocklistAIHistoryModel, InputConfig, SerializedBlock
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentModel, AIDocumentVersion};
 use crate::ai::execution_profiles::ExecutionProfileId;
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
-use crate::ai::llms::LLMId;
+use crate::ai::llms::{LLMId, LLMPreferences};
 use crate::ai::restored_conversations::RestoredAgentConversations;
 use crate::ai_assistant::AskAIType;
 #[cfg(feature = "local_fs")]
@@ -122,7 +123,6 @@ use crate::shell_indicator::ShellIndicatorType;
 use crate::terminal::available_shells::{AvailableShell, AvailableShells};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::PluginModalKind;
-use crate::terminal::focus_env::add_session_focus_env_vars;
 use crate::terminal::general_settings::{GeneralSettings, GeneralSettingsChangedEvent};
 #[cfg(feature = "local_tty")]
 use crate::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
@@ -171,6 +171,7 @@ use crate::workspace::tab_group::TabGroupId;
 use crate::workspace::{
     self, CommandSearchOptions, PaneViewLocator, TabBarLocation, WorkspaceAction,
 };
+use crate::workspaces::user_workspaces::{ResolvedTeamScope, UserWorkspaces};
 use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx};
 
 mod ambient_pane_restoration;
@@ -1752,8 +1753,16 @@ impl PaneGroup {
                     && let Ok(llm_id) = serde_json::from_str::<LLMId>(llm_override)
                 {
                     log::info!("Selecting base agent model {llm_id} (from terminal snapshot)");
-                    crate::ai::llms::LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
-                        llm_prefs.update_preferred_agent_mode_llm(&llm_id, terminal_view_id, ctx);
+                    let scope = ResolvedTeamScope::from_scope(
+                        &UserWorkspaces::as_ref(ctx).team_context_for_view(ctx),
+                    );
+                    LLMPreferences::handle(ctx).update(ctx, |llm_prefs, ctx| {
+                        llm_prefs.update_preferred_agent_mode_llm(
+                            &scope,
+                            &llm_id,
+                            terminal_view_id,
+                            ctx,
+                        );
                     });
                 }
 
@@ -3235,14 +3244,21 @@ impl PaneGroup {
         pane_group
     }
 
-    /// Returns the terminal view currently owning `conversation_id`, even if
-    /// that owner lives outside this pane group.
+    /// Returns the conversation's owner, excluding panes detached for undo-close.
     fn terminal_view_id_for_owned_conversation(
         &self,
         conversation_id: AIConversationId,
         ctx: &AppContext,
     ) -> Option<EntityId> {
-        BlocklistAIHistoryModel::as_ref(ctx).terminal_surface_id_for_conversation(&conversation_id)
+        BlocklistAIHistoryModel::as_ref(ctx)
+            .terminal_surface_id_for_conversation(&conversation_id)
+            .filter(|terminal_view_id| {
+                // Undo-close retains views and their conversations after their panes detach.
+                self.find_pane_id_for_terminal_view(*terminal_view_id, ctx)
+                    .is_some_and(|pane_id| !self.is_pane_hidden_for_close(pane_id))
+                    || ActiveAgentViewsModel::as_ref(ctx)
+                        .is_terminal_view_attached(*terminal_view_id, ctx)
+            })
     }
 
     fn pane_id_for_owned_conversation(
@@ -4720,6 +4736,8 @@ impl PaneGroup {
         self.failed_viewer_child_sessions.remove(&conversation_id);
         self.pending_child_hydrations
             .retain(|_, child_id| *child_id != conversation_id);
+        self.pending_remote_child_hydrations
+            .retain(|_, child_id| *child_id != conversation_id);
         let split_off_child_pane = self.child_agent_origin.as_ref().and_then(|origin| {
             (origin.conversation_id == conversation_id)
                 .then(|| self.pane_id_for_conversation_owner(conversation_id, ctx))
@@ -4785,6 +4803,12 @@ impl PaneGroup {
         // Don't close a pane that doesn't exist
         if !self.pane_contents.contains_key(&pane_id) {
             return;
+        }
+
+        // Remove any share modal associated with the closing session before
+        // taking an early return for the last pane or an already-hidden pane.
+        if Some(pane_id) == self.terminal_with_open_share_block_modal.map(Into::into) {
+            self.terminal_with_open_share_block_modal = None;
         }
 
         // Child agent panes return to off-tree state instead of being
@@ -4862,11 +4886,6 @@ impl PaneGroup {
                 self.hide_closed_pane(pane_id, ctx);
             }
 
-            // Remove opened share modal associated with the closing session.
-            if Some(pane_id) == self.terminal_with_open_share_block_modal.map(Into::into) {
-                self.terminal_with_open_share_block_modal = None;
-            }
-
             if self.pane_with_open_environment_setup_mode_selector == Some(pane_id) {
                 self.pane_with_open_environment_setup_mode_selector = None;
             }
@@ -4896,11 +4915,6 @@ impl PaneGroup {
             }
 
             self.clean_up_pane(pane_id, ctx);
-
-            // Remove opened share modal associated with the closing session.
-            if Some(pane_id) == self.terminal_with_open_share_block_modal.map(Into::into) {
-                self.terminal_with_open_share_block_modal = None;
-            }
 
             if self.pane_with_open_environment_setup_mode_selector == Some(pane_id) {
                 self.pane_with_open_environment_setup_mode_selector = None;
@@ -5094,6 +5108,7 @@ impl PaneGroup {
         file_pane_id: PaneId,
         path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
+        scroll_fraction: Option<f32>,
         ctx: &mut ViewContext<Self>,
     ) {
         use crate::code::editor_management::CodeSource;
@@ -5103,6 +5118,14 @@ impl PaneGroup {
         let source = source.unwrap_or(CodeSource::FileTree { location: path });
 
         let code_pane = CodePane::new(source, None, ctx);
+        // Seed the restored scroll before the pane attaches and lays out. The fraction is consumed
+        // on a later async `ViewportUpdated` (never within this synchronous pass), so setting it
+        // here is strictly before any possible apply.
+        if let Some(fraction) = scroll_fraction {
+            code_pane.file_view(ctx).update(ctx, |code_view, ctx| {
+                code_view.set_pending_scroll_fraction(fraction, ctx);
+            });
+        }
         let success = self.replace_pane(file_pane_id, code_pane, false, ctx);
 
         if !success {
@@ -5119,6 +5142,7 @@ impl PaneGroup {
         code_pane_id: PaneId,
         path: LocalOrRemotePath,
         source: Option<crate::code::editor_management::CodeSource>,
+        scroll_fraction: Option<f32>,
         ctx: &mut ViewContext<Self>,
     ) {
         // Get the active session to pass to the FilePane, if any
@@ -5134,7 +5158,14 @@ impl PaneGroup {
             }
         });
 
-        let file_pane = FilePane::new(Some(path), session, source, ctx);
+        // Construct the pane empty, seed the restored scroll, THEN open the path — so the content
+        // load that triggers `set_content` -> scroll apply can never run before the pending
+        // fraction is set, even if a load were to deliver synchronously.
+        let file_pane = FilePane::new(None, None, source, ctx);
+        file_pane.file_view(ctx).update(ctx, |view, ctx| {
+            view.set_pending_scroll_fraction(scroll_fraction);
+            view.open(path, session, ctx);
+        });
         let success = self.replace_pane(code_pane_id, file_pane, false, ctx);
 
         if !success {
@@ -5189,12 +5220,32 @@ impl PaneGroup {
             }
             PaneEvent::ClearHoveredTabIndex => ctx.emit(Event::ClearHoveredTabIndex),
             #[cfg(feature = "local_fs")]
-            PaneEvent::ReplaceWithCodePane { path, source } => {
-                self.replace_file_pane_with_code_pane(pane_id, path.clone(), source.clone(), ctx);
+            PaneEvent::ReplaceWithCodePane {
+                path,
+                source,
+                scroll_fraction,
+            } => {
+                self.replace_file_pane_with_code_pane(
+                    pane_id,
+                    path.clone(),
+                    source.clone(),
+                    (*scroll_fraction).map(|f| f.into_inner()),
+                    ctx,
+                );
             }
             #[cfg(feature = "local_fs")]
-            PaneEvent::ReplaceWithFilePane { path, source } => {
-                self.replace_code_pane_with_file_pane(pane_id, path.clone(), source.clone(), ctx);
+            PaneEvent::ReplaceWithFilePane {
+                path,
+                source,
+                scroll_fraction,
+            } => {
+                self.replace_code_pane_with_file_pane(
+                    pane_id,
+                    path.clone(),
+                    source.clone(),
+                    (*scroll_fraction).map(|f| f.into_inner()),
+                    ctx,
+                );
             }
             PaneEvent::RepoChanged => {
                 ctx.emit(Event::RepoChanged);
@@ -7246,7 +7297,8 @@ impl PaneGroup {
             if let Some(owner_view_id) = BlocklistAIHistoryModel::as_ref(ctx)
                 .terminal_surface_id_for_conversation(&conversation_id)
             {
-                ctx.dispatch_typed_action(&WorkspaceAction::FocusTerminalViewInWorkspace {
+                // Workspace navigation reads this pane group, so it must wait until we return.
+                ctx.dispatch_typed_action_deferred(WorkspaceAction::FocusTerminalViewInWorkspace {
                     terminal_view_id: owner_view_id,
                 });
                 return;
@@ -7806,6 +7858,7 @@ impl PaneGroup {
 
     /// Reattach all panes to this group. This is called when a closed tab is restored.
     pub fn reattach_panes(&mut self, ctx: &mut ViewContext<Self>) {
+        self.remove_transferred_child_agent_panes(ctx);
         let pane_ids = self.pane_contents.keys().copied().collect_vec();
         for pane_id in pane_ids {
             let Some(pane) = self.pane_contents.get(&pane_id) else {
@@ -7813,6 +7866,23 @@ impl PaneGroup {
             };
             self.attach_pane(pane.as_ref(), ctx);
             self.restore_missing_child_agent_panes_for_terminal_pane_if_needed(pane_id, ctx);
+        }
+    }
+
+    fn remove_transferred_child_agent_panes(&mut self, ctx: &mut ViewContext<Self>) {
+        let transferred_children = self
+            .child_agent_panes
+            .iter()
+            .filter_map(|(conversation_id, pane_id)| {
+                let owner = BlocklistAIHistoryModel::as_ref(ctx)
+                    .terminal_surface_id_for_conversation(conversation_id)?;
+                let terminal_view = self.terminal_view_from_pane_id(*pane_id, ctx)?;
+                (owner != terminal_view.id()).then_some(*conversation_id)
+            })
+            .collect_vec();
+
+        for conversation_id in transferred_children {
+            self.discard_child_agent_pane_for_conversation(conversation_id, ctx);
         }
     }
 

@@ -24,7 +24,7 @@ use warp::terminal::session_settings::HonorPS1;
 use warp::terminal::shell::{self, ShellType};
 use warp::workspace::Workspace;
 use warpui_core::clipboard::ClipboardContent;
-use warpui_core::integration::TestStep;
+use warpui_core::integration::{AssertionCallback, TestStep};
 use warpui_core::{ViewHandle, async_assert, async_assert_eq};
 
 use super::{Builder, new_builder};
@@ -204,6 +204,60 @@ pub fn test_paste_and_type_characters_before_bootstrap() -> Builder {
         )
 }
 
+fn assert_active_prompt_text(expected: &'static str) -> AssertionCallback {
+    Box::new(move |app, window_id| {
+        let input = single_input_view_for_tab(app, window_id, 0);
+        let prompt = input.read(app, |input, ctx| input.prompt_and_rprompt_text(ctx).0);
+        async_assert_eq!(
+            prompt,
+            expected,
+            "active prompt should be {expected:?}, got {prompt:?}"
+        )
+    })
+}
+
+pub fn test_bash_honor_ps1_expands_dynamic_prompt_once() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _) = current_shell_starter_and_version();
+            starter.shell_type() == ShellType::Bash
+        })
+        .with_user_defaults(std::collections::HashMap::from([(
+            HonorPS1::storage_key().to_owned(),
+            true.to_string(),
+        )]))
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "counter=0; PS1='[$((++counter))]'".to_string(),
+            ExpectedExitStatus::Success,
+            (),
+        ))
+        .with_step(
+            new_step_with_default_assertions("Check prompt after setting dynamic PS1")
+                .add_named_assertion(
+                    "Dynamic PS1 expanded once",
+                    assert_active_prompt_text("[1]"),
+                ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Submit first blank prompt")
+                .with_keystrokes(&["enter"])
+                .add_named_assertion(
+                    "Dynamic PS1 advanced once",
+                    assert_active_prompt_text("[2]"),
+                ),
+        )
+        .with_step(
+            new_step_with_default_assertions("Submit second blank prompt")
+                .with_keystrokes(&["enter"])
+                .add_named_assertion(
+                    "Dynamic PS1 advanced once",
+                    assert_active_prompt_text("[3]"),
+                ),
+        )
+}
+
 pub fn test_bootstrap_with_no_script_execution_block() -> Builder {
     new_builder()
         .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
@@ -361,6 +415,38 @@ zle -N zle-line-init
             "echo cursor_mode_vi_ok".to_string(),
             ExpectedExitStatus::Success,
             "cursor_mode_vi_ok",
+        ))
+}
+
+/// Regression test for CORE-3804: a profile that selects PSReadLine's vi edit mode must not
+/// corrupt submitted commands.
+pub fn test_pwsh_vi_edit_mode_does_not_corrupt_commands() -> Builder {
+    new_builder()
+        .set_should_run_test(|| {
+            let (starter, _) = current_shell_starter_and_version();
+            matches!(starter.shell_type(), shell::ShellType::PowerShell)
+        })
+        .with_setup(|utils| {
+            let dir = utils.test_dir();
+            write_rc_files_for_test(
+                dir,
+                "Set-PSReadLineOption -EditMode Vi",
+                [ShellRcType::PowerShell],
+            );
+        })
+        .with_step(wait_until_bootstrapped_single_pane_for_tab(0))
+        .with_step(clear_blocklist_to_remove_bootstrapped_blocks())
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "echo vi_edit_mode_ok".to_string(),
+            ExpectedExitStatus::Success,
+            "vi_edit_mode_ok",
+        ))
+        .with_step(execute_command_for_single_terminal_in_tab(
+            0,
+            "Write-Output second_command_ok".to_string(),
+            ExpectedExitStatus::Success,
+            "second_command_ok",
         ))
 }
 

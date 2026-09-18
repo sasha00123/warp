@@ -345,6 +345,11 @@ pub enum FeatureFlag {
     /// Enables fallback model load output messaging in the warping indicator.
     FallbackModelLoadOutputMessaging,
 
+    /// Names the model doing the work in the warping indicator (e.g. "Warping with
+    /// Claude Sonnet 4.5.") once the server reports which model a response is
+    /// running on, rather than only naming it when the model is a fallback.
+    WarpingModelName,
+
     /// Enables close button on left side of tabs
     TabCloseButtonOnLeft,
 
@@ -589,6 +594,11 @@ pub enum FeatureFlag {
     /// Enables video recording of computer-use sessions for cloud agents.
     VideoRecording,
 
+    /// Gates the Windows `gdigrab` recorder behind its own switch, on top of
+    /// [`FeatureFlag::VideoRecording`]. Windows capture is newer and less proven than the
+    /// macOS/Linux ffmpeg paths, so it rolls out and can be killed independently of them.
+    WindowsVideoRecording,
+
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
 
@@ -754,10 +764,6 @@ pub enum FeatureFlag {
     /// Enables associating a tab color with a directory so tabs automatically
     /// adopt the configured color when their working directory matches.
     DirectoryTabColors,
-
-    /// Enables the new settings to control visibility of Warp Drive, Code Review Panel,
-    /// and Project Explorer & Global Search features.
-    OpenWarpNewSettingsModes,
 
     /// Enables vertical tab layout as an alternative to the horizontal tab bar.
     VerticalTabs,
@@ -964,8 +970,37 @@ pub enum FeatureFlag {
     /// Enables periodic workspace-handoff checkpoints during a cloud agent run,
     /// rather than only uploading a workspace snapshot once at end-of-run.
     /// Requires `OzHandoff` to also be enabled; a no-op for local runs and when
-    /// `--no-snapshot` is set. Off by default while the coordinator rolls out.
+    /// `--no-snapshot` is set. Enabled for dogfood and preview builds while the
+    /// coordinator bakes ahead of a stable rollout.
     PeriodicHandoffCheckpoints,
+
+    /// Observes Ctrl-C (`0x03`) written on the shared-session viewer input
+    /// path to a terminal with a working, rich-status-capable CLI agent
+    /// session (e.g. Claude Code). Arms a short grace window; if no further
+    /// plugin activity is seen, the session (and its ambient task) resolves
+    /// to `Cancelled`. Purely client-side status synthesis: the keystroke is
+    /// always forwarded unchanged and the harness process/sandbox are never
+    /// signaled or torn down.
+    CtrlCCancelsThirdPartyHarness,
+
+    /// Uses fzf or atuin for history search instead of Warp's command search.
+    ShellWidgetHandoff,
+
+    /// Attaches process-tree liveness signals to long-running command
+    /// snapshots, giving the agent evidence that a silent command is still
+    /// doing work before it decides to cancel.
+    LrcActivitySignal,
+
+    /// Gates Ctrl+R / Command Search history ranking on match quality and usage priors (recency,
+    /// session, exit status) plus whitespace space-AND tokenization, instead of Skim's raw
+    /// fuzzy-match score against the whole query as a single pattern. Disabling this is a full
+    /// return to the pre-APP-5650 history search behavior, not an approximation of it.
+    HistorySearchRankingV2,
+
+    /// Advertises client support for server-issued task-message updates that
+    /// replace inline computer-use screenshot bytes with references to
+    /// Warp-managed object storage.
+    StoredScreenshots,
 }
 
 static FLAG_STATES: [AtomicBool; cardinality::<FeatureFlag>()] =
@@ -1013,6 +1048,7 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SummarizationViaMessageReplacement,
     FeatureFlag::LocalComputerUse,
     FeatureFlag::VideoRecording,
+    FeatureFlag::WindowsVideoRecording,
     FeatureFlag::OzLaunchModal,
     // These are enabled via 100% experiment on prod warp-server,
     // but we need to enable here for dogfood builds.
@@ -1030,25 +1066,23 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::SshRemoteServer,
     FeatureFlag::RemoteCodebaseIndexing,
     FeatureFlag::GPTConfigurableContextWindow,
-    FeatureFlag::RestorePromptOnInlineModelSelectorSearch,
     FeatureFlag::WarpControlCli,
     FeatureFlag::TerminalLifecycleRecovery,
     FeatureFlag::PromptCacheExpiryWarning,
     FeatureFlag::JupyterNotebookRendering,
-    FeatureFlag::WaitForEventsParentRegistration,
     FeatureFlag::MultiLevelOrchestration,
-    FeatureFlag::OrchestrationUnifiedStack,
     FeatureFlag::McpJsonTreeView,
     FeatureFlag::BoxDrawingGlyphs,
-    FeatureFlag::WellKnownMcpIds,
-    FeatureFlag::FactoryMcp,
     FeatureFlag::PricingTransparency,
-    FeatureFlag::PeriodicHandoffCheckpoints,
+    FeatureFlag::CtrlCCancelsThirdPartyHarness,
+    FeatureFlag::WarpingModelName,
+    FeatureFlag::LrcActivitySignal,
+    FeatureFlag::StoredScreenshots,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
 /// All PREVIEW_FLAGS are also automatically added to dogfood builds (WarpDev).
-pub const PREVIEW_FLAGS: &[FeatureFlag] = &[];
+pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::PeriodicHandoffCheckpoints];
 
 /// Features enabled for all release builds (i.e.: everything but WarpLocal).
 /// NOTE: if you are promoting a feature from Preview to launch, you'll likely
@@ -1058,8 +1092,6 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::Changelog,
     FeatureFlag::CrashReporting,
     FeatureFlag::VideoRecording,
-    // Marked text is currently only supported on MacOS.
-    #[cfg(target_os = "macos")]
     FeatureFlag::ImeMarkedText,
     // Remote server binary is not yet supported on Windows.
     #[cfg(not(windows))]
