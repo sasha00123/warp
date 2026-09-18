@@ -51,26 +51,41 @@ const NON_ADMIN_ASK_ADMIN_TO_INCREASE_OVERAGES_TEXT: &str =
     ", ask a team admin to increase overages";
 
 fn enterprise_limit_cta(
+    state: &PromptAlertState,
     workspace: Option<&Workspace>,
     team: Option<&Team>,
     user_email: Option<&str>,
-    non_admin_text: &'static str,
-) -> Vec<FormattedTextFragment> {
+) -> Option<Vec<FormattedTextFragment>> {
     let user_email = user_email.unwrap_or_default();
-    let admin_panel_link = workspace
-        .filter(|workspace| workspace.is_native_workspaces_admin(user_email))
-        .map(|_| AdminActions::admin_panel_link_for_workspace())
-        .or_else(|| {
+    let (admin_panel_link, non_admin_text) = match state {
+        PromptAlertState::EnterpriseTeamSpendLimitReached
+        | PromptAlertState::EnterpriseIndividualSpendLimitReached => (
             team.filter(|team| team.has_admin_permissions(user_email))
-                .map(|team| AdminActions::admin_panel_link_for_team(team.uid))
-        });
-    match admin_panel_link {
+                .map(|team| AdminActions::admin_panel_link_for_team(team.uid)),
+            NON_ADMIN_CONTACT_ADMIN_TEXT,
+        ),
+        PromptAlertState::EnterpriseWorkspaceSpendLimitReached => (
+            workspace
+                .filter(|workspace| workspace.is_native_workspaces_admin(user_email))
+                .map(|_| AdminActions::admin_panel_link_for_workspace()),
+            NON_ADMIN_CONTACT_WORKSPACE_ADMIN_TEXT,
+        ),
+        PromptAlertState::NoConnection
+        | PromptAlertState::AnonymousUserRequestLimitSoftGate
+        | PromptAlertState::AnonymousUserRequestLimitHardGate
+        | PromptAlertState::DelinquentDueToPaymentIssue
+        | PromptAlertState::OveragesToggleableButNotEnabled
+        | PromptAlertState::MonthlyOveragesSpendLimitReached
+        | PromptAlertState::RequestLimitReached
+        | PromptAlertState::NoAlert => return None,
+    };
+    Some(match admin_panel_link {
         Some(link) => vec![
             FormattedTextFragment::plain_text("  "),
             FormattedTextFragment::hyperlink(MANAGE_LIMIT_TEXT, link),
         ],
         None => vec![FormattedTextFragment::plain_text(non_admin_text)],
-    }
+    })
 }
 
 fn legacy_enterprise_limit_cta(
@@ -80,12 +95,22 @@ fn legacy_enterprise_limit_cta(
 ) -> Option<Vec<FormattedTextFragment>> {
     let workspace =
         workspace.filter(|workspace| workspace.billing_metadata.is_enterprise_plan())?;
-    Some(enterprise_limit_cta(
-        Some(workspace),
-        team,
-        user_email,
-        NON_ADMIN_CONTACT_ANY_ADMIN_TEXT,
-    ))
+    let user_email = user_email.unwrap_or_default();
+    let admin_panel_link = if workspace.is_native_workspaces_admin(user_email) {
+        Some(AdminActions::admin_panel_link_for_workspace())
+    } else {
+        team.filter(|team| team.has_admin_permissions(user_email))
+            .map(|team| AdminActions::admin_panel_link_for_team(team.uid))
+    };
+    Some(match admin_panel_link {
+        Some(link) => vec![
+            FormattedTextFragment::plain_text("  "),
+            FormattedTextFragment::hyperlink(MANAGE_LIMIT_TEXT, link),
+        ],
+        None => vec![FormattedTextFragment::plain_text(
+            NON_ADMIN_CONTACT_ANY_ADMIN_TEXT,
+        )],
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,24 +186,6 @@ impl PromptAlertState {
             | Self::EnterpriseWorkspaceSpendLimitReached
             | Self::RequestLimitReached => Some(self.primary_text()),
             Self::NoConnection | Self::NoAlert => None,
-        }
-    }
-
-    fn enterprise_non_admin_cta_text(&self) -> Option<&'static str> {
-        match self {
-            Self::EnterpriseTeamSpendLimitReached => Some(NON_ADMIN_CONTACT_ADMIN_TEXT),
-            Self::EnterpriseWorkspaceSpendLimitReached => {
-                Some(NON_ADMIN_CONTACT_WORKSPACE_ADMIN_TEXT)
-            }
-            Self::EnterpriseIndividualSpendLimitReached => Some(NON_ADMIN_CONTACT_ANY_ADMIN_TEXT),
-            Self::NoConnection
-            | Self::AnonymousUserRequestLimitSoftGate
-            | Self::AnonymousUserRequestLimitHardGate
-            | Self::DelinquentDueToPaymentIssue
-            | Self::OveragesToggleableButNotEnabled
-            | Self::MonthlyOveragesSpendLimitReached
-            | Self::RequestLimitReached
-            | Self::NoAlert => None,
         }
     }
 }
@@ -449,14 +456,14 @@ impl PromptAlertView {
             PromptAlertState::EnterpriseTeamSpendLimitReached
             | PromptAlertState::EnterpriseIndividualSpendLimitReached
             | PromptAlertState::EnterpriseWorkspaceSpendLimitReached => {
-                text_fragments.extend(enterprise_limit_cta(
+                if let Some(cta) = enterprise_limit_cta(
+                    state,
                     current_workspace,
                     current_team,
                     user_email.as_deref(),
-                    state
-                        .enterprise_non_admin_cta_text()
-                        .unwrap_or(NON_ADMIN_CONTACT_ANY_ADMIN_TEXT),
-                ));
+                ) {
+                    text_fragments.extend(cta);
+                }
             }
             PromptAlertState::RequestLimitReached => {
                 if let Some(cta) = legacy_enterprise_limit_cta {
