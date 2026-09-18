@@ -1614,7 +1614,6 @@ fn conversation_charges(conversation: &AIConversation) -> ConversationCharges {
 }
 
 impl ConversationCharges {
-    /// The platform fee, or `None` when no charged usage is known at all.
     fn platform_cost(&self) -> Option<CostValue> {
         match self {
             Self::PerRequest(totals) => Some(CostValue::new(
@@ -1637,7 +1636,7 @@ pub(crate) fn conversation_total_text(
     conversation: &AIConversation,
     usage_display_unit: UsageDisplayUnit,
 ) -> String {
-    let text = match (conversation_charges(conversation), usage_display_unit) {
+    match (conversation_charges(conversation), usage_display_unit) {
         (ConversationCharges::PerRequest(totals), UsageDisplayUnit::Dollars) => {
             Some(format_dollars(totals.total_cost_in_cents()))
         }
@@ -1662,9 +1661,12 @@ pub(crate) fn conversation_total_text(
             let credits = inference_credits + platform_credits;
             (credits > 0.0).then(|| format_credits(credits))
         }
-    };
-    text.unwrap_or_else(|| EM_DASH.to_string())
+    }
+    .unwrap_or_else(|| EM_DASH.to_string())
 }
+
+/// Formats a US-cent amount as dollars. A non-zero amount that would round to
+/// `$0.00` is shown as `<$0.01`, since rounding it to zero would misleadingly
 /// suggest no cost was incurred.
 fn format_dollars(cost_in_cents: f32) -> String {
     // Summing float costs can produce `-0.0`, which would print as `$-0.00`.
