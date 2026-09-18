@@ -262,10 +262,10 @@ fn render_button(
                 .build()
                 .finish();
             let tooltip_offset = OffsetPositioning::offset_from_parent(
-                vec2f(0., 4.),
+                vec2f(0., -4.),
                 ParentOffsetBounds::WindowByPosition,
-                ParentAnchor::BottomMiddle,
-                ChildAnchor::TopMiddle,
+                ParentAnchor::TopMiddle,
+                ChildAnchor::BottomMiddle,
             );
             stack.add_positioned_overlay_child(tooltip, tooltip_offset);
         }
