@@ -567,6 +567,23 @@ fn service_account_does_not_retry_failed_preferences() {
     })
 }
 
+#[test]
+fn service_account_stops_retry_loop_started_before_authentication() {
+    App::test(ASSETS, |mut app| async move {
+        initialize_settings(&mut app);
+        let server_api = mock_object_client_with_base_expectations();
+        let _ = create_update_manager_struct(&mut app, Arc::new(server_api));
+
+        let syncer = app.add_singleton_model(|ctx| {
+            CloudPreferencesSyncer::new(false, std::path::PathBuf::new(), true, ctx)
+        });
+        set_service_account(&mut app);
+
+        syncer.update(&mut app, |syncer, ctx| {
+            assert!(!syncer.handle_retry_timer(ctx));
+        });
+    })
+}
 fn run_initial_sync_test(is_onboarded: bool) {
     App::test(ASSETS, |mut app| async move {
         initialize_settings(&mut app);

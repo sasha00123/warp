@@ -217,7 +217,7 @@ impl CloudPreferencesSyncer {
         me.force_local_wins_on_startup = force_local_wins_on_startup;
         // Only poll to retry failed cloud syncs when cloud sync is active.
         if sync_enabled {
-            me.retry_failed_settings(ctx);
+            let _ = me.retry_failed_settings(ctx);
         }
         me
     }
@@ -394,16 +394,24 @@ impl CloudPreferencesSyncer {
 
     /// This method recursively calls itself after a delay. Call it once and only once to start the
     /// loop. It ensures failed preferences are retried until they are successfully synced.
-    fn retry_failed_settings(&mut self, ctx: &mut ModelContext<Self>) {
+    fn retry_failed_settings(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        if !self.should_sync(ctx) {
+            return false;
+        }
         ctx.spawn(
             async {
                 Timer::after(Self::RETRY_POLL).await;
             },
             |me, _, ctx| {
-                me.retry_failed_settings_once(ctx);
-                me.retry_failed_settings(ctx);
+                let _ = me.handle_retry_timer(ctx);
             },
         );
+        true
+    }
+
+    fn handle_retry_timer(&mut self, ctx: &mut ModelContext<Self>) -> bool {
+        self.retry_failed_settings_once(ctx);
+        self.retry_failed_settings(ctx)
     }
 
     fn retry_failed_settings_once(&mut self, ctx: &mut ModelContext<Self>) {
