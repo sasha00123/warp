@@ -159,6 +159,68 @@ fn open_team(uid: &str, name: &str) -> DiscoverableTeam {
         team_accepting_invites: true,
     }
 }
+fn discoverable_workspace(
+    uid: i64,
+    name: &str,
+    open_teams: Vec<DiscoverableTeam>,
+) -> DiscoverableWorkspace {
+    DiscoverableWorkspace {
+        workspace_uid: ServerId::from(uid).into(),
+        name: name.to_string(),
+        open_teams,
+        member_count: 4,
+    }
+}
+
+#[test]
+fn workspace_discovery_action_depends_on_open_teams() {
+    let workspace_without_open_teams = discoverable_workspace(10, "No open teams", Vec::new());
+    let workspace_with_open_teams = discoverable_workspace(
+        11,
+        "Open teams",
+        vec![open_team("0000000000000000000012", "Engineering")],
+    );
+
+    assert_eq!(
+        WorkspaceDiscoveryAction::for_workspace(&workspace_without_open_teams),
+        WorkspaceDiscoveryAction::Join
+    );
+    assert_eq!(
+        WorkspaceDiscoveryAction::for_workspace(&workspace_with_open_teams),
+        WorkspaceDiscoveryAction::Continue
+    );
+    assert_eq!(WorkspaceDiscoveryAction::Join.label(), "Join");
+    assert_eq!(WorkspaceDiscoveryAction::Continue.label(), "Continue");
+}
+
+#[test]
+fn workspace_discovery_screen_selects_one_workspace_and_returns_to_options() {
+    let first = DiscoverableWorkspaceState::new(discoverable_workspace(
+        10,
+        "First",
+        vec![open_team("0000000000000000000012", "Engineering")],
+    ));
+    let second = DiscoverableWorkspaceState::new(discoverable_workspace(
+        11,
+        "Second",
+        vec![open_team("0000000000000000000013", "Design")],
+    ));
+    let workspaces = vec![first, second];
+    let mut screen = WorkspaceDiscoveryScreen::default();
+
+    assert!(screen.selected_workspace(&workspaces).is_none());
+
+    screen.show_open_teams(workspaces[1].workspace.workspace_uid);
+    let selected = screen
+        .selected_workspace(&workspaces)
+        .expect("the selected workspace should be shown");
+    assert_eq!(selected.workspace.name, "Second");
+    assert_eq!(selected.open_team_states.len(), 1);
+    assert_eq!(selected.open_team_states[0].team.name, "Design");
+
+    screen.show_options();
+    assert!(screen.selected_workspace(&workspaces).is_none());
+}
 
 /// Returns the action labels rendered for the item with the given `text` (a
 /// member email or pending-invite email), in the order they were pushed.
