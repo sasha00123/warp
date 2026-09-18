@@ -21,6 +21,7 @@ use std::fmt;
 use base64::Engine as _;
 #[cfg(any(test, feature = "local_tty"))]
 use prost::Message as _;
+#[cfg(any(test, feature = "local_tty"))]
 use session_sharing_protocol::common::ProfileData;
 #[cfg(any(test, feature = "local_tty"))]
 use warp_errors::report_error;
@@ -66,7 +67,6 @@ impl BaseUserQuery {
         }
     }
 
-    #[cfg(any(test, feature = "local_tty"))]
     pub(crate) fn from_proto(query: api::request::input::UserQuery) -> Self {
         Self(Box::new(query))
     }
@@ -77,6 +77,7 @@ impl BaseUserQuery {
     /// the sharer only observes them, so the resolution is `CLIENT_SESSION` and no team is
     /// claimed. A viewer whose profile is unknown gets an explicit `ServerSynthesized` origin,
     /// so the query is never attributed to the sharer as if they had typed it.
+    #[cfg(any(test, feature = "local_tty"))]
     pub(crate) fn for_viewer(profile: Option<&ProfileData>) -> Self {
         let Some(profile) = profile.filter(|profile| !profile.firebase_uid.is_empty()) else {
             return Self::unattributed("shared_session_author_unavailable");
@@ -98,6 +99,7 @@ impl BaseUserQuery {
     /// A query whose author cannot be established, marked with a `ServerSynthesized` origin
     /// naming `reason` so warp-server neither treats it as fresh local input nor leaves it
     /// looking like the sharer's own.
+    #[cfg(any(test, feature = "local_tty"))]
     pub(crate) fn unattributed(reason: &str) -> Self {
         Self::from_proto(api::request::input::UserQuery {
             origin: Some(api::UserQueryOrigin {
