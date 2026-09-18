@@ -202,6 +202,87 @@ fn completed_live_block_retention_is_bounded() {
 }
 
 #[test]
+fn inserted_restored_blocks_are_not_live_eviction_candidates() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let mut restored_block = SerializedBlock::new_for_test(
+        "restored conversation command".into(),
+        "restored conversation output".into(),
+    );
+    restored_block.is_local = Some(true);
+    let restored_block_id = restored_block.id.clone();
+    block_list.insert_restored_block(&restored_block);
+
+    for index in 0..=MAX_RETAINED_COMPLETED_LIVE_BLOCKS {
+        insert_block(
+            &mut block_list,
+            &format!("live command {index}"),
+            &format!("live output {index}"),
+        );
+    }
+
+    let restored_block = block_list
+        .block_with_id(&restored_block_id)
+        .expect("inserted restored block should survive live block eviction");
+    assert!(restored_block.is_restored());
+    assert_eq!(
+        restored_block.bootstrap_stage(),
+        BootstrapStage::PostBootstrapPrecmd
+    );
+}
+
+#[test]
+fn queued_completion_payloads_remain_resolvable_after_live_eviction() {
+    let (events_tx, events_rx) = async_channel::unbounded();
+    let event_proxy = ChannelEventListener::builder_for_test()
+        .with_terminal_events_tx(events_tx)
+        .build();
+    let mut block_list = new_bootstrapped_block_list(None, None, event_proxy);
+    while events_rx.try_recv().is_ok() {}
+
+    let mut expected_commands = Vec::new();
+    for index in 0..=MAX_RETAINED_COMPLETED_LIVE_BLOCKS {
+        let command = format!("queued command {index}");
+        let output = format!("queued output {index}");
+        insert_block(&mut block_list, &command, &output);
+        expected_commands.extend([command, output]);
+    }
+
+    let mut resolved_payloads = Vec::new();
+    while let Ok(event) = events_rx.try_recv() {
+        let completed = match event {
+            Event::BlockCompleted(event) => match event.block_type {
+                BlockType::User(completed) => completed,
+                _ => continue,
+            },
+            Event::AfterBlockCompleted(event) => match event.block_type {
+                BlockType::User(completed) => completed,
+                _ => continue,
+            },
+            _ => continue,
+        };
+        let serialized_block = completed.serialized_block.get(&block_list);
+        let command = completed.command.get(&block_list);
+        let command_with_obfuscated_secrets =
+            completed.command_with_obfuscated_secrets.get(&block_list);
+        let output = completed.output_truncated.get(&block_list);
+        let output_with_obfuscated_secrets = completed
+            .output_truncated_with_obfuscated_secrets
+            .get(&block_list);
+        assert_eq!(command_with_obfuscated_secrets, command);
+        assert_eq!(output_with_obfuscated_secrets, output);
+        assert!(!serialized_block.stylized_command.is_empty());
+        assert!(!serialized_block.stylized_output.is_empty());
+        resolved_payloads.extend([command.clone(), output.clone()]);
+    }
+    expected_commands.extend(expected_commands.clone());
+
+    expected_commands.sort_unstable();
+    resolved_payloads.sort_unstable();
+    assert_eq!(resolved_payloads, expected_commands);
+}
+
+#[test]
 fn live_block_eviction_preserves_unfinished_background_and_active_conversation_blocks() {
     let mut block_list =
         new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
