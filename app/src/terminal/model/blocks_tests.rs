@@ -161,6 +161,111 @@ fn classifies_next_block_ids_relative_to_the_active_block() {
         NextBlockIdDisposition::ActiveDuplicate
     );
 }
+
+#[test]
+fn completed_live_block_retention_is_bounded() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let first_live_block_id = block_list.active_block_id().clone();
+
+    for _ in 0..=MAX_RETAINED_COMPLETED_LIVE_BLOCKS {
+        block_list.start_active_block();
+        block_list.preexec(Default::default());
+        command_finished_and_precmd(&mut block_list);
+    }
+
+    let newest_completed_block_id = block_list.blocks()[block_list.active_block_index().0 - 1]
+        .id()
+        .clone();
+    assert_eq!(
+        block_list.blocks().len(),
+        MAX_RETAINED_COMPLETED_LIVE_BLOCKS + 3
+    );
+    assert!(
+        block_list
+            .block_index_for_id(&first_live_block_id)
+            .is_none()
+    );
+    assert!(
+        block_list
+            .block_index_for_id(&newest_completed_block_id)
+            .is_some()
+    );
+    assert!(!block_list.active_block().finished());
+    for (index, block) in block_list.blocks().iter().enumerate() {
+        assert_eq!(block.index(), BlockIndex(index));
+        assert_eq!(
+            block_list.block_index_for_id(block.id()),
+            Some(BlockIndex(index))
+        );
+    }
+}
+
+#[test]
+fn live_block_eviction_preserves_unfinished_background_and_active_conversation_blocks() {
+    let mut block_list =
+        new_bootstrapped_block_list(None, None, ChannelEventListener::new_for_test());
+    let conversation_id = AIConversationId::new();
+    block_list.enter_conversation_context(conversation_id, false, false);
+    let oldest_live_block_id = block_list.active_block_id().clone();
+
+    for _ in 0..MAX_RETAINED_COMPLETED_LIVE_BLOCKS {
+        block_list.start_active_block();
+        block_list.preexec(Default::default());
+        command_finished_and_precmd(&mut block_list);
+    }
+
+    input_string(&mut block_list, "background output");
+    block_list.on_finish_byte_processing(&ansi::ProcessorInput::new(&[]));
+    let background_block_id = block_list
+        .background_block_mut()
+        .expect("background output should create an unfinished block")
+        .id()
+        .clone();
+
+    block_list.start_active_block();
+    block_list.preexec(Default::default());
+    let newest_completed_block_id = block_list.active_block_id().clone();
+    block_list.active_block_mut().finish(0);
+    block_list.create_new_block(
+        BlockId::new(),
+        BootstrapStage::PostBootstrapPrecmd,
+        None,
+        None,
+    );
+    let active_block_id = block_list.active_block_id().clone();
+    block_list.evict_completed_live_blocks();
+
+    let background_block = block_list
+        .block_with_id(&background_block_id)
+        .expect("unfinished background block should remain");
+    assert!(background_block.is_background());
+    assert!(!background_block.finished());
+    assert_eq!(
+        block_list.blocks().len(),
+        MAX_RETAINED_COMPLETED_LIVE_BLOCKS + 4
+    );
+    assert!(
+        block_list
+            .block_index_for_id(&oldest_live_block_id)
+            .is_none()
+    );
+    assert!(
+        block_list
+            .block_index_for_id(&newest_completed_block_id)
+            .is_some()
+    );
+    assert_eq!(block_list.active_block_id(), &active_block_id);
+    assert!(!block_list.active_block().finished());
+    assert!(matches!(
+        block_list.active_block().agent_view_visibility(),
+        AgentViewVisibility::Agent {
+            origin_conversation_id,
+            ..
+        } if *origin_conversation_id == conversation_id
+    ));
+}
+
 fn drain_terminal_events(events_rx: &async_channel::Receiver<Event>) -> Vec<Event> {
     let mut events = Vec::new();
     while let Ok(event) = events_rx.try_recv() {

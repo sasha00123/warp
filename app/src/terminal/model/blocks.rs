@@ -63,6 +63,10 @@ use crate::terminal::{BlockPadding, ShellHost, SizeInfo, SizeUpdate};
 #[cfg(feature = "local_fs")]
 const RESTORED_BLOCK_SEPARATOR_HEIGHT: f64 = 1.5;
 pub(in crate::terminal) const INLINE_BANNER_HEIGHT: f64 = 2.5;
+
+/// Retains substantial command history while bounding the full pane-sized grids owned per block.
+const MAX_RETAINED_COMPLETED_LIVE_BLOCKS: usize = 500;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ActiveBlockCompletion {
     AlreadyFinished,
@@ -1606,6 +1610,40 @@ impl BlockList {
 
         // Force a re-draw since the blocklist has changed.
         self.event_proxy.send_wakeup_event();
+    }
+
+    fn evict_completed_live_blocks(&mut self) {
+        let active_block_index = self.active_block_index();
+        let completed_live_block_count = self
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(index, block)| {
+                BlockIndex(*index) != active_block_index
+                    && block.bootstrap_stage().is_done()
+                    && block.finished()
+                    && !block.is_static()
+            })
+            .count();
+        let excess = completed_live_block_count.saturating_sub(MAX_RETAINED_COMPLETED_LIVE_BLOCKS);
+        if excess == 0 {
+            return;
+        }
+
+        let indices_to_remove = self
+            .blocks
+            .iter()
+            .enumerate()
+            .filter(|(index, block)| {
+                BlockIndex(*index) != active_block_index
+                    && block.bootstrap_stage().is_done()
+                    && block.finished()
+                    && !block.is_static()
+            })
+            .take(excess)
+            .map(|(index, _)| BlockIndex(index))
+            .collect();
+        self.remove_command_blocks_at_indices(indices_to_remove);
     }
 
     pub fn remove_command_blocks_for_conversation(&mut self, conversation_id: AIConversationId) {
@@ -3324,6 +3362,7 @@ impl BlockList {
             None, /* prompt_metadata */
             None, /* restored_block_was_local */
         );
+        self.evict_completed_live_blocks();
         if next_bootstrap_stage == BootstrapStage::ScriptExecution {
             self.start_active_block();
             self.update_active_block_height();
