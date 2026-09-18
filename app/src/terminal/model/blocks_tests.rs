@@ -239,9 +239,17 @@ fn queued_completion_payloads_remain_resolvable_after_live_eviction() {
         .build();
     let mut block_list = new_bootstrapped_block_list(None, None, event_proxy);
     while events_rx.try_recv().is_ok() {}
+    let first_queued_block_id = block_list.active_block_id().clone();
+    let mut second_queued_block = None;
 
     let mut expected_commands = Vec::new();
     for index in 0..=MAX_RETAINED_COMPLETED_LIVE_BLOCKS {
+        if index == 1 {
+            second_queued_block = Some((
+                block_list.active_block_id().clone(),
+                block_list.active_block_index(),
+            ));
+        }
         let command = format!("queued command {index}");
         let output = format!("queued output {index}");
         insert_block(&mut block_list, &command, &output);
@@ -250,18 +258,41 @@ fn queued_completion_payloads_remain_resolvable_after_live_eviction() {
 
     let mut resolved_payloads = Vec::new();
     while let Ok(event) = events_rx.try_recv() {
-        let completed = match event {
-            Event::BlockCompleted(event) => match event.block_type {
-                BlockType::User(completed) => completed,
-                _ => continue,
-            },
+        let (block_event_identity, completed) = match event {
+            Event::BlockCompleted(event) => {
+                let current_index = event.current_index(&block_list);
+                match event.block_type {
+                    BlockType::User(completed) => {
+                        (Some((event.block_id, current_index)), completed)
+                    }
+                    _ => continue,
+                }
+            }
             Event::AfterBlockCompleted(event) => match event.block_type {
-                BlockType::User(completed) => completed,
+                BlockType::User(completed) => (None, completed),
                 _ => continue,
             },
             _ => continue,
         };
         let serialized_block = completed.serialized_block.get(&block_list);
+        assert_eq!(serialized_block.id, completed.block_id);
+        if let Some((block_id, current_index)) = block_event_identity {
+            assert_eq!(block_id, completed.block_id);
+            assert_eq!(current_index, completed.current_index(&block_list));
+        }
+        assert_eq!(
+            completed.current_index(&block_list),
+            block_list.block_index_for_id(&completed.block_id)
+        );
+        if let Some(current_index) = completed.current_index(&block_list) {
+            assert_eq!(
+                block_list
+                    .block_at(current_index)
+                    .expect("resolved completion index should exist")
+                    .id(),
+                &completed.block_id
+            );
+        }
         let command = completed.command.get(&block_list);
         let command_with_obfuscated_secrets =
             completed.command_with_obfuscated_secrets.get(&block_list);
@@ -280,6 +311,19 @@ fn queued_completion_payloads_remain_resolvable_after_live_eviction() {
     expected_commands.sort_unstable();
     resolved_payloads.sort_unstable();
     assert_eq!(resolved_payloads, expected_commands);
+
+    assert!(
+        block_list
+            .block_index_for_id(&first_queued_block_id)
+            .is_none(),
+        "queued events for evicted blocks must not resolve to the block shifted into their old slot"
+    );
+    let (second_queued_block_id, second_original_index) =
+        second_queued_block.expect("the second queued block should have been recorded");
+    let second_current_index = block_list
+        .block_index_for_id(&second_queued_block_id)
+        .expect("the second queued block should remain retained");
+    assert_eq!(second_current_index.0 + 1, second_original_index.0);
 }
 
 #[test]

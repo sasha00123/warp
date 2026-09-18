@@ -622,13 +622,12 @@ impl From<&Block> for BlockType {
                 if block.is_background() {
                     BlockType::Background(Arc::new(block.into()))
                 } else {
-                    let index = block.block_index;
                     let fields = block
                         .user_block_completion_fields
                         .as_ref()
                         .expect("completed user blocks must have deferred completion fields");
                     BlockType::User(UserBlockCompleted::new(
-                        index,
+                        block.id.clone(),
                         fields.serialized_block.clone(),
                         fields.command.clone(),
                         fields.command_with_obfuscated_secrets.clone(),
@@ -1651,7 +1650,6 @@ impl Block {
             .send_app_event(Event::BlockCompleted(BlockCompletedEvent {
                 block_type,
                 num_secrets_obfuscated: self.num_secrets_obfuscated(),
-                block_index: self.block_index,
                 block_id: self.id.clone(),
                 session_id: self.session_id,
                 restored_block_was_local: self.restored_block_was_local,
