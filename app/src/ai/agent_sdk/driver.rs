@@ -124,6 +124,8 @@ use environment::PrepareEnvironmentError;
 use mcp_startup::MCP_SERVER_STARTUP_TIMEOUT;
 pub(crate) use snapshot::upload_snapshot_for_handoff;
 use terminal::TerminalDriverEvent;
+#[cfg(not(unix))]
+use termination::ObservedSignal;
 use termination::{InterruptSignal, RunEndCause};
 #[cfg(unix)]
 use termination::{emulate_default_and_exit, watch_interrupt_signals};
@@ -1463,7 +1465,7 @@ impl AgentDriver {
                         }
                     };
                     #[cfg(not(unix))]
-                    let signal_fut = future::pending::<InterruptSignal>();
+                    let signal_fut = future::pending::<ObservedSignal>();
 
                     let run = Self::run_internal(task, foreground.clone()).fuse();
                     let timer = timer_fut.fuse();
@@ -1497,18 +1499,21 @@ impl AgentDriver {
                              run_internal to allow recording finalization"
                         );
                     }
-                    RunEndCause::Signal(InterruptSignal::Term) => {
-                        log::warn!(
-                            "SIGTERM received; aborting run_internal to save a handoff snapshot \
-                             before remaining teardown (limited grace period before SIGKILL)"
-                        );
-                    }
-                    RunEndCause::Signal(InterruptSignal::Int) => {
-                        log::warn!(
-                            "SIGINT received; aborting run_internal to save a handoff snapshot \
-                             before restoring default terminate"
-                        );
-                    }
+                    RunEndCause::Signal(signal) => match signal.signal {
+                        InterruptSignal::Term => {
+                            log::warn!(
+                                "SIGTERM received; aborting run_internal to save a handoff \
+                                 snapshot before remaining teardown (limited grace period before \
+                                 SIGKILL)"
+                            );
+                        }
+                        InterruptSignal::Int => {
+                            log::warn!(
+                                "SIGINT received; aborting run_internal to save a handoff snapshot \
+                                 before restoring default terminate"
+                            );
+                        }
+                    },
                     RunEndCause::Completed => {}
                 }
 
@@ -1521,7 +1526,7 @@ impl AgentDriver {
 
                 match cause {
                     RunEndCause::Signal(signal) => {
-                        let signal_name = match signal {
+                        let signal_name = match signal.signal {
                             InterruptSignal::Term => "SIGTERM",
                             InterruptSignal::Int => "SIGINT",
                         };
@@ -1530,7 +1535,7 @@ impl AgentDriver {
                         // emulate default terminate if snapshot/recording gets stuck.
                         Self::save_run_artifacts(&foreground, snapshot_allowed).await;
                         #[cfg(unix)]
-                        emulate_default_and_exit(signal);
+                        emulate_default_and_exit(signal.signal);
                         #[cfg(not(unix))]
                         {
                             let _ = signal;
