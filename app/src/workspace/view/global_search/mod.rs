@@ -8,35 +8,30 @@ pub struct SearchConfig {
     pub use_regex: bool,
     pub use_case_sensitivity: bool,
 }
+
+pub(super) const MAX_MATCH_COUNT: usize = 20_000;
 #[derive(Clone, Debug)]
 pub struct SharedMatchText {
     text: Arc<str>,
-    start: usize,
-}
-
-impl SharedMatchText {
-    fn trim_leading_bytes(mut self, byte_count: usize) -> Self {
-        self.start += byte_count;
-        debug_assert!(self.start <= self.text.len());
-        debug_assert!(self.text.is_char_boundary(self.start));
-        self
-    }
 }
 
 impl Deref for SharedMatchText {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
-        &self.text[self.start..]
+        &self.text
     }
 }
 
 impl From<String> for SharedMatchText {
     fn from(text: String) -> Self {
-        Self {
-            text: text.into(),
-            start: 0,
-        }
+        Self { text: text.into() }
+    }
+}
+
+impl From<&str> for SharedMatchText {
+    fn from(text: &str) -> Self {
+        Self { text: text.into() }
     }
 }
 
