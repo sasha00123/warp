@@ -107,6 +107,9 @@ impl OneTimeModalModel {
             };
 
             let auth_state = crate::auth::AuthStateProvider::as_ref(ctx).get().clone();
+            if auth_state.is_service_account() {
+                return;
+            }
             let is_existing_user = auth_state.is_onboarded().unwrap_or_default();
             if is_existing_user {
                 // Settings modals settings are synced to the cloud, not respecting the user's sync setting, so they
