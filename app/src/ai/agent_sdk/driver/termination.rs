@@ -2,6 +2,7 @@
 //! stopped, and watching for the Unix interrupts that abort an in-progress run so a
 //! handoff snapshot can be saved before the process dies.
 
+use std::fmt;
 #[cfg(unix)]
 use std::io;
 #[cfg(unix)]
@@ -18,7 +19,7 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 #[cfg(unix)]
 use signal_hook::iterator::exfiltrator::WithOrigin;
 #[cfg(unix)]
-use signal_hook::low_level::siginfo::{Cause, Chld, Process, Sent};
+use signal_hook::low_level::siginfo::{Cause, Process};
 #[cfg(unix)]
 use signal_hook::{SigId, flag};
 #[cfg(unix)]
@@ -36,6 +37,15 @@ pub(super) enum InterruptSignal {
     /// SIGINT from Ctrl-C.
     #[cfg_attr(not(unix), allow(dead_code))]
     Int,
+}
+
+impl fmt::Display for InterruptSignal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Term => "SIGTERM",
+            Self::Int => "SIGINT",
+        })
+    }
 }
 
 #[cfg(unix)]
@@ -162,7 +172,8 @@ pub(super) async fn watch_interrupt_signals(
         if let Some(origin) = signals.next().await
             && let Some(signal) = InterruptSignal::from_raw(origin.signal)
         {
-            log::warn!("Received Unix signal {signal:?}");
+            log::warn!("Received Unix signal {signal}");
+            // Trace before notifying the driver so shutdown cannot race and prevent the event.
             emit_signal_trace(signal, origin.process, origin.cause);
             let _ = signal_tx.send(signal);
         }
@@ -183,54 +194,22 @@ pub(super) async fn watch_interrupt_signals(
 
 #[cfg(unix)]
 fn emit_signal_trace(signal: InterruptSignal, sender: Option<Process>, cause: Cause) {
+    use crate::server::telemetry::secret_redaction::redact_secrets_in_string;
     let username = sender.and_then(|process| resolve_username(process.uid));
     let mut command_line = sender.and_then(|process| resolve_command_line(process.pid));
     if let Some(command_line) = command_line.as_mut() {
-        crate::server::telemetry::secret_redaction::redact_secrets_in_string(command_line);
+        redact_secrets_in_string(command_line);
     }
     tracing::warn!(
         tags.cloud_agent = true,
-        signal = signal_name(signal),
-        signal.cause = cause_name(cause),
+        signal = %signal,
+        signal.cause = ?cause,
         signal.sender.pid = sender.map(|process| process.pid),
         signal.sender.uid = sender.map(|process| process.uid),
         signal.sender.username = username,
         signal.sender.command_line = command_line,
         "received unix signal"
     );
-}
-
-#[cfg(unix)]
-fn signal_name(signal: InterruptSignal) -> &'static str {
-    match signal {
-        InterruptSignal::Term => "SIGTERM",
-        InterruptSignal::Int => "SIGINT",
-    }
-}
-
-#[cfg(unix)]
-fn cause_name(cause: Cause) -> &'static str {
-    match cause {
-        Cause::Unknown => "unknown",
-        Cause::Kernel => "kernel",
-        Cause::Sent(sent) => match sent {
-            Sent::User => "sent_user",
-            Sent::TKill => "sent_tkill",
-            Sent::Queue => "sent_queue",
-            Sent::MesgQ => "sent_message_queue",
-            _ => "sent_other",
-        },
-        Cause::Chld(child) => match child {
-            Chld::Exited => "child_exited",
-            Chld::Killed => "child_killed",
-            Chld::Dumped => "child_dumped",
-            Chld::Trapped => "child_trapped",
-            Chld::Stopped => "child_stopped",
-            Chld::Continued => "child_continued",
-            _ => "child_other",
-        },
-        _ => "other",
-    }
 }
 
 #[cfg(unix)]
@@ -245,8 +224,8 @@ fn resolve_username(uid: libc::uid_t) -> Option<String> {
 fn resolve_command_line(pid: libc::pid_t) -> Option<String> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
-    let pid = u32::try_from(pid).ok().filter(|pid| *pid > 0)?;
-    let pid = Pid::from_u32(pid);
+    let pid = usize::try_from(pid).ok().filter(|pid| *pid > 0)?;
+    let pid = Pid::from(pid);
     let mut system = System::new();
     system.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[pid]),

@@ -1524,11 +1524,7 @@ impl AgentDriver {
 
                 match cause {
                     RunEndCause::Signal(signal) => {
-                        let signal_name = match signal {
-                            InterruptSignal::Term => "SIGTERM",
-                            InterruptSignal::Int => "SIGINT",
-                        };
-                        eprintln!("Received {signal_name}; shutting down...");
+                        eprintln!("Received {signal}; shutting down...");
                         // Keep handlers registered so a second SIGINT/SIGTERM can still
                         // emulate default terminate if snapshot/recording gets stuck.
                         Self::save_run_artifacts(&foreground, snapshot_allowed).await;
