@@ -4559,6 +4559,192 @@ fn gql_user(
     }
 }
 
+fn discovery_options_for_test() -> DiscoveryOptions {
+    DiscoveryOptions {
+        workspaces: vec![DiscoverableWorkspace {
+            workspace_uid: ServerId::from(10).into(),
+            name: "Discoverable Workspace".to_string(),
+            open_teams: vec![DiscoverableTeam {
+                team_uid: ServerId::from(11).to_string(),
+                num_members: 2,
+                name: "Open Team".to_string(),
+                team_accepting_invites: true,
+            }],
+            member_count: 4,
+        }],
+        legacy_teams: vec![DiscoverableTeam {
+            team_uid: ServerId::from(12).to_string(),
+            num_members: 3,
+            name: "Legacy Team".to_string(),
+            team_accepting_invites: true,
+        }],
+    }
+}
+
+#[test]
+fn test_fetch_discovery_options_updates_model_and_reports_outcome() {
+    for succeeds in [true, false] {
+        App::test((), |mut app| async move {
+            let returned_options = discovery_options_for_test();
+            let mut team_client = MockTeamClient::new();
+            team_client
+                .expect_get_discovery_options()
+                .times(1)
+                .return_once(move || {
+                    if succeeds {
+                        Ok(returned_options)
+                    } else {
+                        Err(anyhow::anyhow!("discovery unavailable"))
+                    }
+                });
+            app.add_singleton_model(|ctx| {
+                UserWorkspaces::mock(
+                    Arc::new(team_client),
+                    Arc::new(MockWorkspaceClient::new()),
+                    vec![],
+                    ctx,
+                )
+            });
+
+            let user_workspaces = UserWorkspaces::handle(&app);
+            let (sender, receiver) = async_channel::unbounded();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&user_workspaces, move |_, event, _| match event {
+                    UserWorkspacesEvent::FetchDiscoveryOptionsSuccess(options) => {
+                        let _ = sender.try_send(Ok(options.clone()));
+                    }
+                    UserWorkspacesEvent::FetchDiscoveryOptionsRejected(err) => {
+                        let _ = sender.try_send(Err(err.to_string()));
+                    }
+                    _ => {}
+                });
+            });
+
+            user_workspaces.update(&mut app, |user_workspaces, ctx| {
+                user_workspaces.fetch_discovery_options(ctx);
+            });
+
+            let result = receiver
+                .recv()
+                .await
+                .expect("expected a discovery-options result event");
+            if succeeds {
+                let options = result.expect("expected discovery options");
+                assert_eq!(options.workspaces.len(), 1);
+                assert_eq!(options.workspaces[0].name, "Discoverable Workspace");
+                assert_eq!(options.legacy_teams.len(), 1);
+                app.read(|ctx| {
+                    let user_workspaces = UserWorkspaces::as_ref(ctx);
+                    assert_eq!(user_workspaces.discoverable_workspaces.len(), 1);
+                    assert_eq!(user_workspaces.joinable_teams.len(), 1);
+                });
+            } else {
+                assert_eq!(
+                    result.expect_err("expected discovery rejection"),
+                    "discovery unavailable"
+                );
+                app.read(|ctx| {
+                    let user_workspaces = UserWorkspaces::as_ref(ctx);
+                    assert!(user_workspaces.discoverable_workspaces.is_empty());
+                    assert!(user_workspaces.joinable_teams.is_empty());
+                });
+            }
+        });
+    }
+}
+
+#[test]
+fn test_join_workspace_from_discovery_forwards_target_and_reports_outcome() {
+    for (team_uid, succeeds) in [
+        (None, true),
+        (Some(ServerId::from(11)), true),
+        (None, false),
+    ] {
+        App::test((), |mut app| async move {
+            let workspace_uid: WorkspaceUid = ServerId::from(10).into();
+            let expected_team_uid = team_uid;
+            let mut team_client = MockTeamClient::new();
+            team_client
+                .expect_join_workspace_from_discovery()
+                .withf(move |actual_workspace_uid, actual_team_uid| {
+                    *actual_workspace_uid == workspace_uid && *actual_team_uid == expected_team_uid
+                })
+                .times(1)
+                .return_once(move |_, _| {
+                    if succeeds {
+                        Ok(WorkspacesMetadataWithPricing {
+                            metadata: WorkspacesMetadataResponse {
+                                workspaces: vec![Workspace::from_local_cache(
+                                    workspace_uid,
+                                    "Joined Workspace".to_string(),
+                                    None,
+                                    None,
+                                )],
+                                joinable_teams: vec![],
+                                experiments: None,
+                                ai_credit_availability: None,
+                                user_purchase_policy: None,
+                            },
+                            pricing_info: None,
+                        })
+                    } else {
+                        Err(anyhow::anyhow!("workspace join rejected"))
+                    }
+                });
+            app.add_singleton_model(PrivacySettings::mock);
+            app.add_singleton_model(|ctx| {
+                UserWorkspaces::mock(
+                    Arc::new(team_client),
+                    Arc::new(MockWorkspaceClient::new()),
+                    vec![],
+                    ctx,
+                )
+            });
+
+            let user_workspaces = UserWorkspaces::handle(&app);
+            let (sender, receiver) = async_channel::unbounded();
+            app.update(|ctx| {
+                ctx.subscribe_to_model(&user_workspaces, move |_, event, _| match event {
+                    UserWorkspacesEvent::JoinWorkspaceFromDiscoverySuccess => {
+                        let _ = sender.try_send(Ok(()));
+                    }
+                    UserWorkspacesEvent::JoinWorkspaceFromDiscoveryRejected(err) => {
+                        let _ = sender.try_send(Err(err.to_string()));
+                    }
+                    _ => {}
+                });
+            });
+
+            user_workspaces.update(&mut app, |user_workspaces, ctx| {
+                user_workspaces.join_workspace_from_discovery(workspace_uid, team_uid, ctx);
+            });
+
+            let result = receiver
+                .recv()
+                .await
+                .expect("expected a workspace discovery join result event");
+            if succeeds {
+                result.expect("expected workspace discovery join success");
+                app.read(|ctx| {
+                    assert_eq!(
+                        UserWorkspaces::as_ref(ctx)
+                            .current_workspace()
+                            .map(|workspace| workspace.uid),
+                        Some(workspace_uid)
+                    );
+                });
+            } else {
+                assert_eq!(
+                    result.expect_err("expected workspace discovery join rejection"),
+                    "workspace join rejected"
+                );
+                app.read(|ctx| {
+                    assert!(UserWorkspaces::as_ref(ctx).current_workspace().is_none());
+                });
+            }
+        });
+    }
+}
 #[test]
 fn test_workspace_open_teams_survive_metadata_conversion() {
     let mut workspace = gql_workspace("workspace_uid123456789", None);
