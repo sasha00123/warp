@@ -124,8 +124,6 @@ use environment::PrepareEnvironmentError;
 use mcp_startup::MCP_SERVER_STARTUP_TIMEOUT;
 pub(crate) use snapshot::upload_snapshot_for_handoff;
 use terminal::TerminalDriverEvent;
-#[cfg(not(unix))]
-use termination::ObservedSignal;
 use termination::{InterruptSignal, RunEndCause};
 #[cfg(unix)]
 use termination::{emulate_default_and_exit, watch_interrupt_signals};
@@ -1465,7 +1463,7 @@ impl AgentDriver {
                         }
                     };
                     #[cfg(not(unix))]
-                    let signal_fut = future::pending::<ObservedSignal>();
+                    let signal_fut = future::pending::<InterruptSignal>();
 
                     let run = Self::run_internal(task, foreground.clone()).fuse();
                     let timer = timer_fut.fuse();
@@ -1499,7 +1497,7 @@ impl AgentDriver {
                              run_internal to allow recording finalization"
                         );
                     }
-                    RunEndCause::Signal(signal) => match signal.signal {
+                    RunEndCause::Signal(signal) => match signal {
                         InterruptSignal::Term => {
                             log::warn!(
                                 "SIGTERM received; aborting run_internal to save a handoff \
@@ -1526,7 +1524,7 @@ impl AgentDriver {
 
                 match cause {
                     RunEndCause::Signal(signal) => {
-                        let signal_name = match signal.signal {
+                        let signal_name = match signal {
                             InterruptSignal::Term => "SIGTERM",
                             InterruptSignal::Int => "SIGINT",
                         };
@@ -1535,7 +1533,7 @@ impl AgentDriver {
                         // emulate default terminate if snapshot/recording gets stuck.
                         Self::save_run_artifacts(&foreground, snapshot_allowed).await;
                         #[cfg(unix)]
-                        emulate_default_and_exit(signal.signal);
+                        emulate_default_and_exit(signal);
                         #[cfg(not(unix))]
                         {
                             let _ = signal;

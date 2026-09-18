@@ -37,16 +37,6 @@ pub(super) enum InterruptSignal {
     #[cfg_attr(not(unix), allow(dead_code))]
     Int,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ObservedSignal {
-    pub(super) signal: InterruptSignal,
-    /// Kernel-reported process metadata. For SIGINT and SIGTERM, this identifies the sender when
-    /// the platform supplies it; kernel-originated signals and some platforms omit it.
-    #[cfg(unix)]
-    sender: Option<Process>,
-    #[cfg(unix)]
-    cause: Cause,
-}
 
 #[cfg(unix)]
 impl InterruptSignal {
@@ -66,16 +56,6 @@ impl InterruptSignal {
     }
 }
 
-#[cfg(unix)]
-impl ObservedSignal {
-    fn from_origin(origin: signal_hook::low_level::siginfo::Origin) -> Option<Self> {
-        Some(Self {
-            signal: InterruptSignal::from_raw(origin.signal)?,
-            sender: origin.process,
-            cause: origin.cause,
-        })
-    }
-}
 /// Why `run_internal` stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RunEndCause {
@@ -84,7 +64,7 @@ pub(super) enum RunEndCause {
     /// `WARP_SANDBOX_DEADLINE` warning window fired.
     SandboxDeadline,
     /// A Unix interrupt arrived while the run was still in progress.
-    Signal(ObservedSignal),
+    Signal(InterruptSignal),
 }
 
 /// The interrupt handlers registered by [`watch_interrupt_signals`], plus the background
@@ -148,7 +128,7 @@ impl Drop for RegisteredHandlers {
 #[cfg(unix)]
 pub(super) async fn watch_interrupt_signals(
     background: &Background,
-) -> io::Result<(oneshot::Receiver<ObservedSignal>, InterruptWatch)> {
+) -> io::Result<(oneshot::Receiver<InterruptSignal>, InterruptWatch)> {
     let shutdown_armed = Arc::new(AtomicBool::new(false));
     let mut handlers = RegisteredHandlers::default();
     for signal in [SIGTERM, SIGINT] {
@@ -179,9 +159,11 @@ pub(super) async fn watch_interrupt_signals(
         // Only the signals registered above are delivered, so the first item maps to one
         // of them. The stream itself only ends once the watch is torn down, at which
         // point nothing is waiting on `signal_tx` any more.
-        if let Some(signal) = signals.next().await.and_then(ObservedSignal::from_origin) {
+        if let Some(origin) = signals.next().await
+            && let Some(signal) = InterruptSignal::from_raw(origin.signal)
+        {
             log::warn!("Received Unix signal {signal:?}");
-            emit_signal_trace(signal);
+            emit_signal_trace(signal, origin.process, origin.cause);
             let _ = signal_tx.send(signal);
         }
     });
@@ -200,19 +182,18 @@ pub(super) async fn watch_interrupt_signals(
 }
 
 #[cfg(unix)]
-fn emit_signal_trace(signal: ObservedSignal) {
-    let username = signal
-        .sender
-        .and_then(|process| resolve_username(process.uid));
-    let command_line = signal
-        .sender
-        .and_then(|process| resolve_command_line(process.pid));
+fn emit_signal_trace(signal: InterruptSignal, sender: Option<Process>, cause: Cause) {
+    let username = sender.and_then(|process| resolve_username(process.uid));
+    let mut command_line = sender.and_then(|process| resolve_command_line(process.pid));
+    if let Some(command_line) = command_line.as_mut() {
+        crate::server::telemetry::secret_redaction::redact_secrets_in_string(command_line);
+    }
     tracing::warn!(
         tags.cloud_agent = true,
-        signal = signal_name(signal.signal),
-        signal.cause = cause_name(signal.cause),
-        signal.sender.pid = signal.sender.map(|process| process.pid),
-        signal.sender.uid = signal.sender.map(|process| process.uid),
+        signal = signal_name(signal),
+        signal.cause = cause_name(cause),
+        signal.sender.pid = sender.map(|process| process.pid),
+        signal.sender.uid = sender.map(|process| process.uid),
         signal.sender.username = username,
         signal.sender.command_line = command_line,
         "received unix signal"

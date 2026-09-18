@@ -33,15 +33,15 @@ fn signal_lifecycle_child() -> ! {
         block_on(super::watch_interrupt_signals(&background)).expect("signal watch");
     println!("{READY_MARKER}");
 
-    let observed = block_on(signal_rx).expect("interrupt signal");
-    assert_eq!(observed.signal, expected);
+    let signal = block_on(signal_rx).expect("interrupt signal");
+    assert_eq!(signal, expected);
 
     if kind == "int-hang" {
         println!("{SHUTDOWN_MARKER}");
         std::thread::sleep(STUCK_SHUTDOWN_BAILOUT);
         std::process::exit(1);
     }
-    super::emulate_default_and_exit(observed.signal);
+    super::emulate_default_and_exit(signal);
 }
 
 /// Re-executes this test binary as a child running only `test_name`, delivers
