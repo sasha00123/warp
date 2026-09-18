@@ -7,6 +7,7 @@ pub(crate) mod comment;
 pub(crate) mod icons;
 pub(crate) mod linearization;
 pub(crate) mod redaction;
+pub(crate) mod request_metadata;
 pub(crate) mod task;
 mod task_store;
 pub(super) mod telemetry;
@@ -716,6 +717,10 @@ pub enum RenderableAIError {
         /// connectivity before attempting the resume.
         waiting_for_network: bool,
     },
+    /// An explicit terminal failure reported by the MAA server in a `StreamFinished` event.
+    AgentStreamFailure {
+        error_message: String,
+    },
     Other {
         error_message: String,
         will_attempt_resume: bool,
@@ -918,6 +923,7 @@ impl Display for RenderableAIError {
                     Self::TRANSIENT_NETWORK_ERROR_MESSAGE
                 )
             }
+            Self::AgentStreamFailure { error_message } => write!(f, "{error_message}"),
             Self::Other { error_message, .. } => write!(f, "{error_message}"),
             Self::AgentExitedShell { command } => write!(
                 f,
