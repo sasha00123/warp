@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [personal/main]
   push:
-    branches: [personal/main, feature/distribution-pipeline]
+    branches: [personal/main]
   workflow_dispatch:
     inputs:
       source_ref:
@@ -18,12 +18,34 @@ concurrency:
 jobs:
   validate:
     name: Validate
+    outputs:
+      build_sha: ${{ steps.revision.outputs.build_sha }}
+      status_sha: ${{ steps.revision.outputs.status_sha }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           ref: ${{ inputs.source_ref || github.ref }}
           persist-credentials: false
+          fetch-depth: 2
+      - name: Pin source and status commits
+        id: revision
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "build_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [[ -n "$PR_HEAD" ]]; then
+            status_sha="$PR_HEAD"
+          elif [[ "$SOURCE_REF" =~ ^refs/pull/[0-9]+/merge$ ]]; then
+            status_sha=$(git rev-parse HEAD^2)
+          elif [[ -z "$SOURCE_REF" ]]; then
+            status_sha=$(git rev-parse HEAD)
+          else
+            echo 'source_ref must be empty or refs/pull/NUMBER/merge' >&2
+            exit 1
+          fi
+          echo "status_sha=$status_sha" >> "$GITHUB_OUTPUT"
       - run: python3 distribution/verify.py
       - run: python3 -m unittest discover -s distribution -p 'test_*.py'
       - run: bash -n distribution/*.sh
@@ -31,5 +53,25 @@ jobs:
     needs: validate
     uses: ./.github/workflows/personal-build.yml
     with:
-      source_ref: ${{ inputs.source_ref || github.ref }}
+      source_ref: ${{ needs.validate.outputs.build_sha }}
       version: 0.0.${{ github.run_number }}
+  status:
+    name: Report personal CI
+    needs: [validate, build]
+    if: always() && needs.validate.outputs.status_sha != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - name: Report result on the tested feature commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          STATUS_SHA: ${{ needs.validate.outputs.status_sha }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          state=failure
+          if [[ "$VALIDATE_RESULT" == success && "$BUILD_RESULT" == success ]]; then state=success; fi
+          gh api "repos/$GH_REPO/statuses/$STATUS_SHA" -f state="$state" -f context='personal/ci' -f target_url="$RUN_URL" -f description='Validation and both macOS builds'

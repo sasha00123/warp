@@ -8,13 +8,13 @@ Unofficial personal build of Warp; not affiliated with its upstream developer.
 - `feature/*` contains one independent change. Start from a suitable upstream commit, open a PR to `personal/main`, and merge with a merge commit to preserve feature history.
 - `personal/main` contains reviewed features and these distribution files. Set it as the GitHub default branch **after merging this PR** so scheduled and manual workflows are discoverable. Never merge distribution code into `main`.
 - Upstream sync advances `main` only if it is an ancestor of upstream; divergence fails without force-pushing. Integration is an explicit `main` → `personal/main` PR. A sync generated with `GITHUB_TOKEN` does not trigger another workflow; run Personal CI manually on the PR merge ref before merging (see below).
-- Protect `personal/main` against deletion and force pushes; require Personal CI / Validate and both macOS build jobs. Protect `main` against deletion/force pushes but permit the sync bot's fast-forward updates. Avoid requiring distribution checks on `main`.
+- Protect `personal/main` against deletion and force pushes; require the `personal/ci` commit status (validation and both macOS builds). Protect `main` against deletion/force pushes but permit the sync bot's fast-forward updates. Avoid requiring distribution checks on `main`.
 
 ## Build and release
 
 Personal CI builds PR merge commits and every push to `personal/main`, using ordinary hosted macOS Apple Silicon and Intel runners. PR jobs have read-only tokens and no signing secrets. Artifacts expire after 14 days.
 
-Run `Personal CI` with ref `personal/main` and `source_ref=refs/pull/NUMBER/merge` to validate a bot-created upstream PR. Its artifact is a test build only. Resolve conflicts on a separate integration branch before testing.
+Run `Personal CI` with ref `personal/main` and `source_ref=refs/pull/NUMBER/merge` to validate a bot-created upstream PR. Its artifact is a test build only. The result is posted as `personal/ci` on the tested PR head commit, so the same protection applies to bot-created PRs. For outside-fork PRs, a maintainer must run this manual validation after review because their read-only token cannot post commit statuses. Resolve conflicts on a separate integration branch before testing.
 
 Run `Personal Release` on `personal/main` with a numeric `version` such as `2026.9.19`. A version is immutable: reruns refuse existing tags/releases. Both architectures must build successfully before a draft GitHub Release is created. It contains ZIP apps, source archive at the exact built commit, Cargo.lock, source/rebuild instructions, license notices, checksums and a Homebrew manifest. Review the draft and launch the app before publishing it. Never publish a draft whose build or source bundle is incomplete.
 

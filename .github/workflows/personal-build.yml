@@ -41,6 +41,7 @@ jobs:
           ref: ${{ inputs.source_ref }}
           persist-credentials: false
           submodules: recursive
+          lfs: true
       - name: Check distribution safeguards
         run: python3 distribution/verify.py
       - name: Install build tools
