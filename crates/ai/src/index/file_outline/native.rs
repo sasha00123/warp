@@ -24,12 +24,23 @@ cfg_if::cfg_if! {
         use crate::index::matches_gitignores;
     }
 }
+const MAX_OUTLINE_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+const MAX_SYMBOL_COMMENT_BYTES: usize = 512;
+const MAX_SYMBOL_COMMENT_LINES: usize = 8;
 
 /// Given a repo path, try to build its outline. An outline is a list of all its files and the symbols
 /// of interest from each file.
 pub async fn build_outline(
     path: &Path,
     max_num_files_limit: Option<usize>,
+) -> anyhow::Result<Outline> {
+    build_outline_with_byte_budget(path, max_num_files_limit, MAX_OUTLINE_TOTAL_BYTES).await
+}
+
+async fn build_outline_with_byte_budget(
+    path: &Path,
+    max_num_files_limit: Option<usize>,
+    max_retained_bytes: usize,
 ) -> anyhow::Result<Outline> {
     const MAX_DEPTH: usize = 200;
     let mut gitignores = vec![];
@@ -60,6 +71,7 @@ pub async fn build_outline(
         BudgetExceededBehavior::StopAndLazyLoad,
     )
     .await?;
+    files.sort_by(|left, right| left.path.as_str().cmp(right.path.as_str()));
 
     let (sender, receiver) = oneshot::channel();
 
@@ -68,7 +80,6 @@ pub async fn build_outline(
     };
 
     pool.spawn(move || {
-        // Parse each file in parallel. Note that we have to fold and then reduce given the parallelization.
         let result = pool.install(|| {
             files
                 .par_iter()
@@ -79,7 +90,7 @@ pub async fn build_outline(
 
                     (metadata.file_id, outline)
                 })
-                .collect::<HashMap<_, _>>()
+                .collect::<Vec<_>>()
         });
 
         if sender.send(result).is_err() {
@@ -90,19 +101,55 @@ pub async fn build_outline(
         }
     });
 
-    let file_id_to_outline = receiver.await?;
+    let (file_id_to_outline, retained_outline_bytes) =
+        retain_file_outlines(receiver.await?, max_retained_bytes);
 
     Ok(Outline {
         root: entry,
         file_id_to_outline,
+        retained_outline_bytes,
         gitignores,
     })
+}
+
+fn retained_file_outline_bytes(outline: &FileOutline) -> usize {
+    std::mem::size_of::<FileId>().saturating_add(outline.retained_bytes())
+}
+
+fn retain_file_outlines(
+    outlines: Vec<(FileId, FileOutline)>,
+    max_retained_bytes: usize,
+) -> (HashMap<FileId, FileOutline>, usize) {
+    let mut retained_outlines = HashMap::new();
+    let mut retained_bytes = 0usize;
+
+    for (file_id, outline) in outlines {
+        let outline_bytes = retained_file_outline_bytes(&outline);
+        let next_retained_bytes = retained_bytes.saturating_add(outline_bytes);
+        if next_retained_bytes > max_retained_bytes {
+            break;
+        }
+
+        retained_outlines.insert(file_id, outline);
+        retained_bytes = next_retained_bytes;
+    }
+
+    (retained_outlines, retained_bytes)
 }
 
 impl Outline {
     /// Update this outline in-place with a set of changed files. This is asynchronous because it
     /// requires re-parsing modified files.
     pub async fn update(&mut self, outline_update: RepositoryUpdate) {
+        self.update_with_byte_budget(outline_update, MAX_OUTLINE_TOTAL_BYTES)
+            .await;
+    }
+
+    async fn update_with_byte_budget(
+        &mut self,
+        outline_update: RepositoryUpdate,
+        max_retained_bytes: usize,
+    ) {
         let RepositoryUpdate {
             added,
             modified,
@@ -125,24 +172,40 @@ impl Outline {
             }
         }
 
-        // Extract paths from TargetFile for addition, filtering out gitignored files
-        for target_file in added
+        let mut target_files_to_parse = added
             .into_iter()
-            .chain(modified.into_iter())
+            .chain(modified)
             .chain(moved.keys().cloned())
             .filter(|target_file| !target_file.is_ignored)
-        {
+            .collect_vec();
+        target_files_to_parse.sort_by(|left, right| left.path.cmp(&right.path));
+        target_files_to_parse.dedup_by(|left, right| left.path == right.path);
+
+        // Extract paths from TargetFile for addition, filtering out gitignored files
+        for target_file in target_files_to_parse {
             if let Some(file_metadata) = self.find_or_insert_path_to_file_tree(&target_file.path) {
                 files_metadata.push(file_metadata.clone());
             }
         }
-
-        for metadata in &files_metadata_to_remove {
-            self.file_id_to_outline.remove(&metadata.file_id);
+        for metadata in files_metadata_to_remove.iter().chain(&files_metadata) {
+            if let Some(outline) = self.file_id_to_outline.remove(&metadata.file_id) {
+                self.retained_outline_bytes = self
+                    .retained_outline_bytes
+                    .saturating_sub(retained_file_outline_bytes(&outline));
+            }
         }
 
         if let Some(updated_outlines) = parse_symbols_for_files(files_metadata).await {
-            self.file_id_to_outline.extend(updated_outlines);
+            for (file_id, outline) in updated_outlines {
+                let outline_bytes = retained_file_outline_bytes(&outline);
+                let next_retained_bytes = self.retained_outline_bytes.saturating_add(outline_bytes);
+                if next_retained_bytes > max_retained_bytes {
+                    break;
+                }
+
+                self.file_id_to_outline.insert(file_id, outline);
+                self.retained_outline_bytes = next_retained_bytes;
+            }
         }
     }
 
@@ -208,14 +271,16 @@ impl Outline {
 
 /// Parse file symbols in parallel. This uses the [shared Rayon file-parsing pool](THREADPOOL),
 /// but is `async` because it MUST NOT be called from the main thread.
-async fn parse_symbols_for_files(files: Vec<FileMetadata>) -> Option<HashMap<FileId, FileOutline>> {
+async fn parse_symbols_for_files(
+    mut files: Vec<FileMetadata>,
+) -> Option<Vec<(FileId, FileOutline)>> {
     let pool = THREADPOOL.as_ref()?;
+    files.sort_by(|left, right| left.path.as_str().cmp(right.path.as_str()));
 
     let (tx, rx) = oneshot::channel();
 
     pool.install(move || {
         rayon::spawn(move || {
-            // Parse each file in parallel. Note that we have to fold and then reduce given the parallelization.
             let result = files
                 .par_iter()
                 .map(|metadata| {
@@ -225,7 +290,7 @@ async fn parse_symbols_for_files(files: Vec<FileMetadata>) -> Option<HashMap<Fil
 
                     (metadata.file_id, outline)
                 })
-                .collect::<HashMap<_, _>>();
+                .collect::<Vec<_>>();
             let _ = tx.send(result);
         });
     });
@@ -255,11 +320,7 @@ fn parse_file_outline(path: &Path) -> anyhow::Result<FileOutline> {
             .map(|(fn_name, type_prefix, comments, line_number)| Symbol {
                 name: fn_name.to_owned(),
                 type_prefix: type_prefix.map(String::from),
-                comment: if comments.is_empty() {
-                    None
-                } else {
-                    Some(comments.into_iter().map(String::from).collect())
-                },
+                comment: retain_comment(comments),
                 line_number,
             })
             .collect_vec()
@@ -285,6 +346,32 @@ fn parse_file_outline(path: &Path) -> anyhow::Result<FileOutline> {
     }
 
     Ok(FileOutline { symbols })
+}
+fn retain_comment(comments: Vec<&str>) -> Option<Vec<String>> {
+    let mut retained = Vec::new();
+    let mut remaining_bytes = MAX_SYMBOL_COMMENT_BYTES;
+
+    for comment in comments.into_iter().take(MAX_SYMBOL_COMMENT_LINES) {
+        if remaining_bytes == 0 {
+            break;
+        }
+
+        let mut end = comment.len().min(remaining_bytes);
+        while !comment.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == 0 {
+            break;
+        }
+
+        retained.push(comment[..end].to_owned());
+        remaining_bytes -= end;
+        if end < comment.len() {
+            break;
+        }
+    }
+
+    (!retained.is_empty()).then_some(retained)
 }
 
 /// Given the content of a file, return all the symbols of interest.

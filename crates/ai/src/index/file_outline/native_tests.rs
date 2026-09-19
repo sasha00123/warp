@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
 
+use repo_metadata::TargetFile;
 use tempfile::TempDir;
 
 use super::*;
@@ -11,6 +12,66 @@ fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
     let mut file = File::create(&file_path).unwrap();
     file.write_all(content.as_bytes()).unwrap();
     file_path
+}
+
+#[test]
+fn parse_comments_respects_line_and_utf8_byte_limits() {
+    let temp_dir = TempDir::new().unwrap();
+    let long_comment = format!("/// {}", "界".repeat(200));
+    let content = format!(
+        "{long_comment}\nfn byte_limited() {{}}\n\n// one\n// two\n// three\n// four\n// five\n// six\n// seven\n// eight\n// nine\nfn line_limited() {{}}\n"
+    );
+    let file_path = create_test_file(&temp_dir, "comments.rs", &content);
+
+    let outline = parse_file_outline(&file_path).unwrap();
+    let symbols = outline.symbols.unwrap();
+
+    assert_eq!(symbols[0].comment.as_ref().unwrap()[0].len(), 511);
+    assert!(symbols[0].comment.as_ref().unwrap()[0].ends_with('界'));
+    assert_eq!(symbols[1].comment.as_ref().unwrap().len(), 8);
+    assert_eq!(
+        symbols[1].comment.as_ref().unwrap().last().unwrap(),
+        "// eight"
+    );
+}
+
+#[tokio::test]
+async fn initial_outline_stops_retaining_files_at_the_byte_budget() {
+    let temp_dir = TempDir::new().unwrap();
+    let first_path = create_test_file(&temp_dir, "a.rs", "fn retained_symbol() {}\n");
+    create_test_file(&temp_dir, "b.rs", "fn omitted_symbol() {}\n");
+    let first_outline = parse_file_outline(&first_path).unwrap();
+    let byte_budget = retained_file_outline_bytes(&first_outline);
+
+    let outline = build_outline_with_byte_budget(temp_dir.path(), None, byte_budget)
+        .await
+        .unwrap();
+    let symbols_by_file = outline.to_symbols_by_file(None);
+
+    assert_eq!(outline.retained_outline_bytes, byte_budget);
+    assert_eq!(symbols_by_file.len(), 1);
+    assert!(symbols_by_file.contains_key(&first_path));
+}
+
+#[tokio::test]
+async fn incremental_update_stops_retaining_files_at_the_byte_budget() {
+    let temp_dir = TempDir::new().unwrap();
+    let first_path = create_test_file(&temp_dir, "a.rs", "fn retained_symbol() {}\n");
+    let mut outline = build_outline(temp_dir.path(), None).await.unwrap();
+    let byte_budget = outline.retained_outline_bytes;
+    let second_path = create_test_file(&temp_dir, "b.rs", "fn omitted_symbol() {}\n");
+    let update = RepositoryUpdate {
+        added: [TargetFile::new(second_path.clone(), false)].into(),
+        ..Default::default()
+    };
+
+    outline.update_with_byte_budget(update, byte_budget).await;
+    let symbols_by_file = outline.to_symbols_by_file(None);
+
+    assert_eq!(outline.retained_outline_bytes, byte_budget);
+    assert_eq!(symbols_by_file.len(), 1);
+    assert!(symbols_by_file.contains_key(&first_path));
+    assert!(!symbols_by_file.contains_key(&second_path));
 }
 
 #[test]
