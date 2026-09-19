@@ -13,7 +13,11 @@ elif [[ "$mode" != adhoc ]]; then
   echo "Unknown signing mode" >&2; exit 1
 fi
 # Nested code must be signed before its containing bundle, without --deep signing.
+main_executable=$(plutil -extract CFBundleExecutable raw -o - "$app/Contents/Info.plist")
 while IFS= read -r -d '' file; do
+  # codesign treats the main executable path as its enclosing app, so defer it
+  # until the app's nested plug-ins have their own valid signatures.
+  [[ "$file" == "$app/Contents/MacOS/$main_executable" ]] && continue
   if file -b "$file" | grep -q 'Mach-O'; then
     codesign --force --sign "$identity" "${options[@]}" "$file"
   fi
