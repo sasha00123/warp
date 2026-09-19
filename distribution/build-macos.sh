@@ -2,6 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version="$1"
+export CARGO_ABOUT_CONFIG="$PWD/distribution/about.toml"
+export CARGO_ABOUT_FAIL=1
 export PATH="$PWD/target/personal-tools/bin:$PATH"
 arch=$(uname -m)
 target=$(rustc -vV | sed -n 's/^host: //p')

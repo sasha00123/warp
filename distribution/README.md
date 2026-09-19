@@ -52,7 +52,7 @@ Current bundles use ad-hoc signatures, **not** a trusted Developer ID signature 
 
 ## License and branding review (2026-09-19)
 
-Primary application license: AGPL-3.0. Keep all original copyright/license files. Reusable components retain their own licenses (Zed includes Apache-2.0; WarpUI uses MIT). Every binary must remain associated with publicly accessible corresponding source including modifications and build scripts. License and source notices are embedded in the bundle.
+Primary application license: AGPL-3.0. Keep all original copyright/license files. Reusable components retain their own licenses (Zed includes Apache-2.0; WarpUI uses MIT). Every binary must remain associated with publicly accessible corresponding source including modifications and build scripts. License and source notices are embedded in the bundle. Attribution generation uses `distribution/about.toml` with private-marked crates included and `--fail`; AGPL dependencies must not be silently omitted.
 
 Sources: [Zed software overview](https://zed.dev/software-overview), [Zed brand](https://zed.dev/brand), [Warp FAQ](https://github.com/warpdotdev/warp/blob/master/FAQ.md), repository LICENSE files. The source licenses do not provide permission to imply upstream endorsement. The application names include “Custom”; releases, package descriptions and app metadata explicitly say “unofficial build”. The IDs, protocols and source-drawn Dock icons distinguish these builds from official apps; upstream names in attribution and feature documentation describe origin. This is not a trademark clearance or a promise of upstream cloud support.
 
