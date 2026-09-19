@@ -35,43 +35,57 @@ fn parse_comments_respects_line_and_utf8_byte_limits() {
     );
 }
 
-#[tokio::test]
-async fn initial_outline_stops_retaining_files_at_the_byte_budget() {
+#[test]
+fn initial_outline_stops_retaining_files_at_the_byte_budget() {
     let temp_dir = TempDir::new().unwrap();
     let first_path = create_test_file(&temp_dir, "a.rs", "fn retained_symbol() {}\n");
-    create_test_file(&temp_dir, "b.rs", "fn omitted_symbol() {}\n");
+    let second_path = create_test_file(&temp_dir, "b.rs", "fn omitted_symbol() {}\n");
     let first_outline = parse_file_outline(&first_path).unwrap();
+    let second_outline = parse_file_outline(&second_path).unwrap();
     let byte_budget = retained_file_outline_bytes(&first_outline);
+    let first_file_id = FileMetadata::new(first_path, false).file_id;
+    let second_file_id = FileMetadata::new(second_path, false).file_id;
+    let (retained, retained_bytes) = retain_file_outlines(
+        vec![
+            (first_file_id, first_outline),
+            (second_file_id, second_outline),
+        ],
+        byte_budget,
+    );
 
-    let outline = build_outline_with_byte_budget(temp_dir.path(), None, byte_budget)
-        .await
-        .unwrap();
-    let symbols_by_file = outline.to_symbols_by_file(None);
-
-    assert_eq!(outline.retained_outline_bytes, byte_budget);
-    assert_eq!(symbols_by_file.len(), 1);
-    assert!(symbols_by_file.contains_key(&first_path));
+    assert_eq!(retained_bytes, byte_budget);
+    assert_eq!(retained.len(), 1);
+    assert!(retained.contains_key(&first_file_id));
+    assert!(!retained.contains_key(&second_file_id));
 }
 
 #[tokio::test]
-async fn incremental_update_stops_retaining_files_at_the_byte_budget() {
+async fn incremental_update_does_not_insert_files_after_the_byte_budget() {
     let temp_dir = TempDir::new().unwrap();
-    let first_path = create_test_file(&temp_dir, "a.rs", "fn retained_symbol() {}\n");
     let mut outline = build_outline(temp_dir.path(), None).await.unwrap();
-    let byte_budget = outline.retained_outline_bytes;
-    let second_path = create_test_file(&temp_dir, "b.rs", "fn omitted_symbol() {}\n");
+    outline.retained_outline_bytes = MAX_OUTLINE_TOTAL_BYTES;
+    let added_path = create_test_file(&temp_dir, "added.rs", "fn omitted_symbol() {}\n");
     let update = RepositoryUpdate {
-        added: [TargetFile::new(second_path.clone(), false)].into(),
+        added: [TargetFile::new(added_path.clone(), false)].into(),
         ..Default::default()
     };
+    outline.update(update).await;
 
-    outline.update_with_byte_budget(update, byte_budget).await;
-    let symbols_by_file = outline.to_symbols_by_file(None);
+    assert_eq!(outline.retained_outline_bytes, MAX_OUTLINE_TOTAL_BYTES);
+    assert!(outline.to_file_symbols(None).is_empty());
+    assert!(!outline.to_symbols_by_file(None).contains_key(&added_path));
+}
+#[test]
+fn multiline_block_comments_count_each_physical_line() {
+    let temp_dir = TempDir::new().unwrap();
+    let content = "/** one\n * two\n * three\n * four\n * five\n * six\n * seven\n * eight\n * nine\n */\nfn documented() {}\n";
+    let file_path = create_test_file(&temp_dir, "block_comment.rs", content);
 
-    assert_eq!(outline.retained_outline_bytes, byte_budget);
-    assert_eq!(symbols_by_file.len(), 1);
-    assert!(symbols_by_file.contains_key(&first_path));
-    assert!(!symbols_by_file.contains_key(&second_path));
+    let outline = parse_file_outline(&file_path).unwrap();
+    let comments = outline.symbols.unwrap()[0].comment.clone().unwrap();
+
+    assert_eq!(comments.len(), MAX_SYMBOL_COMMENT_LINES);
+    assert!(comments.last().unwrap().contains("eight"));
 }
 
 #[test]

@@ -32,6 +32,7 @@ pub struct Outline {
     /// Mapping the leaf file nodes to their outline.
     file_id_to_outline: HashMap<FileId, FileOutline>,
     retained_outline_bytes: usize,
+    remaining_file_quota: Option<usize>,
 
     /// List of gitignore patterns.
     gitignores: Vec<Arc<Gitignore>>,
