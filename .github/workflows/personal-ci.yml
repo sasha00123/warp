@@ -32,20 +32,16 @@ jobs:
         id: revision
         env:
           SOURCE_REF: ${{ inputs.source_ref }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "build_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          if [[ -n "$PR_HEAD" ]]; then
-            status_sha="$PR_HEAD"
-          elif [[ "$SOURCE_REF" =~ ^refs/pull/[0-9]+/merge$ ]]; then
-            status_sha=$(git rev-parse HEAD^2)
-          elif [[ -z "$SOURCE_REF" ]]; then
-            status_sha=$(git rev-parse HEAD)
-          else
+          if [[ -n "$SOURCE_REF" && ! "$SOURCE_REF" =~ ^refs/pull/[0-9]+/merge$ ]]; then
             echo 'source_ref must be empty or refs/pull/NUMBER/merge' >&2
             exit 1
           fi
-          echo "status_sha=$status_sha" >> "$GITHUB_OUTPUT"
+          # Required status belongs to the exact integration result we build.
+          # Never reuse a successful head status after the PR base has changed.
+          sha=$(git rev-parse HEAD)
+          echo "build_sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "status_sha=$sha" >> "$GITHUB_OUTPUT"
       - run: python3 distribution/verify.py
       - run: python3 -m unittest discover -s distribution -p 'test_*.py'
       - run: bash -n distribution/*.sh
@@ -63,7 +59,7 @@ jobs:
     permissions:
       statuses: write
     steps:
-      - name: Report result on the tested feature commit
+      - name: Report result on the tested integration commit
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

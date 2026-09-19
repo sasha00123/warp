@@ -29,7 +29,9 @@ jobs:
         run: |
           python3 -c 'import os,re; assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", os.environ["VERSION"])'
           gh api "repos/$GH_REPO/git/matching-refs/tags/personal-v$VERSION" > refs.json
-          python3 -c 'import json; assert not json.load(open("refs.json")), "Version already exists"'
+          python3 -c 'import json,os; tag="refs/tags/personal-v"+os.environ["VERSION"]; assert all(r["ref"] != tag for r in json.load(open("refs.json"))), "Version tag already exists"'
+          gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > releases.json
+          python3 -c 'import json,os; tag="personal-v"+os.environ["VERSION"]; assert all(r["tag_name"] != tag for page in json.load(open("releases.json")) for r in page), "Version release or draft already exists"'
   build:
     needs: validate
     uses: ./.github/workflows/personal-build.yml

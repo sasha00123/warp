@@ -46,8 +46,8 @@ jobs:
         run: python3 distribution/verify.py
       - name: Install build tools
         run: bash distribution/setup-macos.sh
-      - name: Targeted Rust tests
-        run: cargo test --locked -p warp_core --lib channel
+      - name: Core identity and path tests
+        run: cargo test --locked -p warp_core --lib
       - name: Build and package
         env:
           PERSONAL_VERSION: ${{ inputs.version }}

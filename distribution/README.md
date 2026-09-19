@@ -8,17 +8,17 @@ Unofficial build of Warp; not affiliated with its upstream developer.
 - `feature/*` contains one independent change. Start from a suitable upstream commit, open a PR to `personal/main`, and merge with a merge commit to preserve feature history.
 - `personal/main` contains reviewed features and these distribution files. Set it as the GitHub default branch **after merging this PR** so scheduled and manual workflows are discoverable. Never merge distribution code into `main`.
 - Upstream sync advances `main` only if it is an ancestor of upstream; divergence fails without force-pushing. Integration is an explicit `main` → `personal/main` PR. A sync generated with `GITHUB_TOKEN` does not trigger another workflow; run Personal CI manually on the PR merge ref before merging (see below).
-- Protect `personal/main` against deletion and force pushes; require the `personal/ci` commit status (validation and both macOS builds). Protect `main` against deletion/force pushes but permit the sync bot's fast-forward updates. Avoid requiring distribution checks on `main`.
+- Protect `personal/main` against deletion and force pushes; require the `personal/ci` commit status (validation and both macOS builds). Leave “Require branches to be up to date” unchecked: feature branches must remain based on the upstream mirror, without other personal features merged back into them. The required status is posted on the tested PR merge commit, not its head; after the integration base changes, run CI on the new PR merge ref before merging. Protect `main` against deletion/force pushes but permit the sync bot's fast-forward updates. Avoid requiring distribution checks on `main`.
 
 ## Build and release
 
 Personal CI builds PR merge commits and every push to `personal/main`, using ordinary hosted macOS Apple Silicon and Intel runners. PR jobs have read-only tokens and no signing secrets. Artifacts expire after 14 days.
 
-Run `Personal CI` with ref `personal/main` and `source_ref=refs/pull/NUMBER/merge` to validate a bot-created upstream PR. Its artifact is a test build only. The result is posted as `personal/ci` on the tested PR head commit, so the same protection applies to bot-created PRs. For outside-fork PRs, a maintainer must run this manual validation after review because their read-only token cannot post commit statuses. Resolve conflicts on a separate integration branch before testing.
+Run `Personal CI` with ref `personal/main` and `source_ref=refs/pull/NUMBER/merge` to validate a bot-created upstream PR. Its artifact is a test build only. The result is posted as `personal/ci` on the exact tested PR merge commit, so the same protection applies to bot-created PRs. For outside-fork PRs, a maintainer must run this manual validation after review because their read-only token cannot post commit statuses. Resolve conflicts on a separate integration branch before testing.
 
 Run `Personal Release` on `personal/main` with a numeric `version` such as `2026.9.19`. A version is immutable: reruns refuse existing tags/releases. Both architectures must build successfully before a draft GitHub Release is created. It contains ZIP apps, source archive at the exact built commit, Cargo.lock, source/rebuild instructions, license notices, checksums and a Homebrew manifest. Review the draft and launch the app before publishing it. Never publish a draft whose build or source bundle is incomplete.
 
-The release source archive includes the exact Git tree and recursively initialized submodules. Rust registry and Git dependency sources are vendored into `vendor/`; use `cargo --config distribution/vendor-config.toml` when rebuilding from the archive. Non-Cargo build-time downloads and toolchains may still require the network. Preserve all corresponding sources for as long as distributing binaries.
+The release source archive includes the exact Git tree and recursively initialized submodules. Rust registry and Git dependency sources are vendored into `vendor/`; use `cargo --config distribution/vendor-config.toml` when rebuilding from the archive. Non-Cargo build-time downloads and toolchains may still require the network. The distribution scripts read Git metadata: to rebuild a packaged release with those scripts, clone this fork, check out the exact commit in `homebrew.json`, and initialize its submodules. The source archive is also available independently; direct Cargo builds can use its vendored sources with the config above. Preserve all corresponding sources for as long as distributing binaries.
 
 After publication the separate `sasha00123/homebrew-tap` workflow discovers releases and opens a cask update PR. It uses its own repository token, so no cross-repository PAT is needed. Once the cask PR is merged:
 
@@ -39,7 +39,7 @@ bash distribution/build-macos.sh 2026.9.19
 - App: `Warp Custom.app`
 - Bundle ID: `io.sasha00123.WarpCustom`
 - URL scheme: `warp-custom`
-- Separate user data; no automatic migration or deletion of official-app settings.
+- Separate user data: `~/.warp-custom` and `~/Library/Application Support/io.sasha00123.WarpCustom`. The official Apple App Group is not used. No automatic migration or deletion of official or prior OSS app settings.
 - Unique geometric icon, generated from source by `icon.swift`.
 - Upstream self-updating is disabled at compile time/channel configuration; update with Homebrew or GitHub Releases.
 - Cloud accounts and upstream-hosted features still depend on the upstream services and their terms. Custom URI schemes may require provider-specific OAuth registration; cloud login callbacks are not certified by this pipeline.
