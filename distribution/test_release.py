@@ -19,11 +19,11 @@ class ReleaseValidation(unittest.TestCase):
         self.root = Path(self.temporary.name)
         (self.root / "distribution").mkdir()
         (self.root / "dist").mkdir()
-        self.config = {"cask": "sasha-edit", "bundle_id": "io.sasha00123.SashaEdit", "repository": "sasha00123/zed", "app_name": "SashaEdit"}
+        self.config = {"cask": "zed-custom", "bundle_id": "io.sasha00123.ZedCustom", "repository": "sasha00123/zed", "app_name": "Zed Custom"}
         (self.root / "distribution/config.json").write_text(json.dumps(self.config))
         self.commit = "a" * 40
         for arch in ("arm64", "x86_64"):
-            name = f"sasha-edit-1.2.3-macos-{arch}.zip"
+            name = f"zed-custom-1.2.3-macos-{arch}.zip"
             (self.root / "dist" / name).write_bytes(b"test bundle")
             data = {**self.config, "version": "1.2.3", "commit": self.commit, "architecture": arch, "asset": name,
                     "sha256": hashlib.sha256(b"test bundle").hexdigest()}
@@ -54,8 +54,8 @@ class ReleaseValidation(unittest.TestCase):
     def test_release_contains_corresponding_source_and_dependencies(self):
         self.prepare_source()
         release.assemble("1.2.3", self.commit)
-        source = self.root / "dist/sasha-edit-1.2.3-source.tar.gz"
-        prefix = "sasha-edit-1.2.3-source/"
+        source = self.root / "dist/zed-custom-1.2.3-source.tar.gz"
+        prefix = "zed-custom-1.2.3-source/"
         with tarfile.open(source) as archive:
             self.assertIn(prefix + "Cargo.lock", archive.getnames())
             self.assertIn(prefix + "vendor/example/LICENSE", archive.getnames())
@@ -80,7 +80,7 @@ class ReleaseValidation(unittest.TestCase):
             release.assemble("1.2.3", self.commit)
 
     def test_refuses_changed_binary(self):
-        (self.root / "dist/sasha-edit-1.2.3-macos-arm64.zip").write_bytes(b"different")
+        (self.root / "dist/zed-custom-1.2.3-macos-arm64.zip").write_bytes(b"different")
         with self.assertRaisesRegex(ValueError, "checksum"):
             release.assemble("1.2.3", self.commit)
 

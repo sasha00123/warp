@@ -18,13 +18,13 @@ for path in (root / ".github/workflows").glob("personal-*.yml"):
 if config["executable"] == "zed":
     build = (root / "distribution/build-macos.sh").read_text()
     assert "export ZED_UPDATE_EXPLANATION=" in build
-    assert 'pub const APP_NAME: &str = "SashaEdit";' in (root / "crates/paths/src/paths.rs").read_text()
+    assert 'pub const APP_NAME: &str = "ZedCustom";' in (root / "crates/paths/src/paths.rs").read_text()
     source = (root / "crates/auto_update/src/auto_update.rs").read_text()
     poll = source.split("pub fn poll(", 1)[1].split("if check_type.is_manual()", 1)[0]
     assert 'option_env!("ZED_UPDATE_EXPLANATION").is_some()' in poll and "return;" in poll
 else:
     source = (root / "app/src/bin/oss.rs").read_text()
-    assert 'AppId::new("io", "sasha00123", "SashaTerm")' in source
+    assert 'AppId::new("io", "sasha00123", "WarpCustom")' in source
     assert "autoupdate_config: None" in source and "Channel::Oss" in source
     assert '--channel oss' in (root / "distribution/build-macos.sh").read_text()
     updater = (root / "app/src/autoupdate/mod.rs").read_text()

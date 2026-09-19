@@ -1,7 +1,7 @@
 {
-  "app_name": "SashaTerm",
-  "cask": "sasha-term",
-  "bundle_id": "io.sasha00123.SashaTerm",
+  "app_name": "Warp Custom",
+  "cask": "warp-custom",
+  "bundle_id": "io.sasha00123.WarpCustom",
   "upstream": "warpdotdev/warp",
   "upstream_branch": "master",
   "executable": "warp-oss",

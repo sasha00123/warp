@@ -37,6 +37,7 @@ def package(app, version, arch):
             del plist[name]
     plist.update(CFBundleIdentifier=CONFIG["bundle_id"], CFBundleName=CONFIG["app_name"],
                  CFBundleDisplayName=CONFIG["app_name"], CFBundleVersion=version,
+                 CFBundleGetInfoString=CONFIG["app_name"] + " — unofficial build",
                  CFBundleShortVersionString=version, CFBundleIconFile="Personal.icns",
                  LSMinimumSystemVersion=CONFIG["minimum_macos"],
                  CFBundleURLTypes=[{"CFBundleURLName": CONFIG["app_name"], "CFBundleURLSchemes": [CONFIG["cask"]]}])
