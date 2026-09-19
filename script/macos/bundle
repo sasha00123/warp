@@ -107,6 +107,7 @@ CODESIGN=true
 SELFSIGN=false
 OPEN_AFTER_BUNDLE=false
 READ_PASSWORDS_FROM_ENV=false
+BUNDLE_ONLY=false
 
 PARAMS=""
 while (( "$#" )); do
@@ -127,6 +128,11 @@ while (( "$#" )); do
     --skip-build)
       echo "Skipping binary build step."
       BUILD_BINARY=false
+      shift
+      ;;
+    # Hand the unsigned app to a separate distributor without creating an upstream DMG.
+    --bundle-only)
+      BUNDLE_ONLY=true
       shift
       ;;
     # Skip code signing process
@@ -242,6 +248,11 @@ while (( "$#" )); do
 done
 # set positional arguments in their proper place
 eval set -- "$PARAMS"
+
+if [[ $BUNDLE_ONLY = true && ( $ARTIFACT != app || $CODESIGN = true || $SELFSIGN = true ) ]]; then
+  echo '--bundle-only requires --artifact app and --nosign' >&2
+  exit 1
+fi
 
 # Infer a cargo profile from the bundle configuration.
 if [[ $DEBUG = true ]]; then
@@ -679,6 +690,12 @@ elif [[ "$ARTIFACT" == "tui" ]]; then
 else
   echo "Unsupported artifact: $ARTIFACT" >&2
   exit 1
+fi
+
+if [[ $BUNDLE_ONLY = true ]]; then
+  echo "Unsigned app ready at $BUNDLE_DIR/$WARP_APP_NAME.app"
+  trap - EXIT
+  exit 0
 fi
 
 ##########################################

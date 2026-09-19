@@ -33,13 +33,13 @@ def assemble(version, commit):
         raise ValueError("source checkout does not match binary commit")
     subprocess.run(["git", "diff", "--exit-code", "HEAD"], cwd=ROOT, check=True)
     source = dist / f'{config["cask"]}-{version}-source.tar.gz'
-    tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
+    tracked = subprocess.check_output(["git", "ls-files", "--recurse-submodules", "-z"], cwd=ROOT).decode().split("\0")
     # Archive the checkout actually built, including initialized submodule sources.
     prefix = f'{config["cask"]}-{version}-source'
     with tarfile.open(source, "w:gz") as archive:
         for name in tracked:
             if name:
-                archive.add(ROOT / name, arcname=f"{prefix}/{name}", recursive=(ROOT / name).is_dir())
+                archive.add(ROOT / name, arcname=f"{prefix}/{name}", recursive=False)
         vendor = ROOT / "target/personal-vendor"
         if not vendor.is_dir():
             raise ValueError("Missing vendored dependency sources")

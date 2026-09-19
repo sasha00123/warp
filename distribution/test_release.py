@@ -2,6 +2,8 @@ import hashlib
 import importlib.util
 import json
 import tempfile
+import subprocess
+import tarfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -29,6 +31,48 @@ class ReleaseValidation(unittest.TestCase):
         self.override = patch.object(release, "ROOT", self.root)
         self.override.start()
         self.addCleanup(self.override.stop)
+
+    def prepare_source(self):
+        def git(*args):
+            return subprocess.check_output(["git", *args], cwd=self.root, stderr=subprocess.STDOUT, text=True).strip()
+        git("init", "-b", "main")
+        git("config", "user.name", "Test")
+        git("config", "user.email", "test@example.invalid")
+        (self.root / "Cargo.lock").write_text("# Locked test dependencies\n")
+        git("add", "distribution", "Cargo.lock")
+        git("commit", "-m", "Source fixture")
+        self.commit = git("rev-parse", "HEAD")
+        for arch in ("arm64", "x86_64"):
+            path = self.root / f"dist/manifest-{arch}.json"
+            data = json.loads(path.read_text()); data["commit"] = self.commit
+            path.write_text(json.dumps(data))
+        vendor = self.root / "target/personal-vendor/example"
+        vendor.mkdir(parents=True)
+        (vendor / "LICENSE").write_text("Dependency license fixture")
+        (self.root / "target/personal-vendor-config.toml").write_text('[source.vendored-sources]\ndirectory = "target/personal-vendor"\n')
+
+    def test_release_contains_corresponding_source_and_dependencies(self):
+        self.prepare_source()
+        release.assemble("1.2.3", self.commit)
+        source = self.root / "dist/sasha-edit-1.2.3-source.tar.gz"
+        prefix = "sasha-edit-1.2.3-source/"
+        with tarfile.open(source) as archive:
+            self.assertIn(prefix + "Cargo.lock", archive.getnames())
+            self.assertIn(prefix + "vendor/example/LICENSE", archive.getnames())
+            self.assertFalse(any("/.git/" in name or "/dist/" in name for name in archive.getnames()))
+            config = archive.extractfile(prefix + "distribution/vendor-config.toml").read().decode()
+            self.assertIn('directory = "vendor"', config)
+        manifest = json.loads((self.root / "dist/homebrew.json").read_text())
+        self.assertEqual(manifest["commit"], self.commit)
+        for line in (self.root / "dist/SHA256SUMS").read_text().splitlines():
+            checksum, filename = line.split("  ")
+            self.assertEqual(checksum, hashlib.sha256((self.root / "dist" / filename).read_bytes()).hexdigest())
+
+    def test_refuses_dirty_source(self):
+        self.prepare_source()
+        (self.root / "Cargo.lock").write_text("changed source")
+        with self.assertRaises(subprocess.CalledProcessError):
+            release.assemble("1.2.3", self.commit)
 
     def test_refuses_missing_architecture(self):
         (self.root / "dist/manifest-x86_64.json").unlink()
