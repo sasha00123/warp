@@ -69,3 +69,7 @@ __pycache__/
 
 # Project notes
 .note/
+
+# Personal distribution build outputs
+/dist/
+/distribution/__pycache__/
