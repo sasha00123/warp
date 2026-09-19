@@ -75,6 +75,35 @@ async fn incremental_update_does_not_insert_files_after_the_byte_budget() {
     assert!(outline.to_file_symbols(None).is_empty());
     assert!(!outline.to_symbols_by_file(None).contains_key(&added_path));
 }
+#[tokio::test]
+async fn rejected_new_file_does_not_evict_a_later_modified_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let modified_path = create_test_file(&temp_dir, "z.rs", "fn old_symbol() {}\n");
+    let mut outline = build_outline(temp_dir.path(), None).await.unwrap();
+    outline.retained_outline_bytes = MAX_OUTLINE_TOTAL_BYTES;
+    let added_path = create_test_file(&temp_dir, "a.rs", "fn added_symbol() {}\n");
+    std::fs::write(&modified_path, "fn new_symbol() {}\n").unwrap();
+    let update = RepositoryUpdate {
+        added: [TargetFile::new(added_path.clone(), false)].into(),
+        modified: [TargetFile::new(modified_path.clone(), false)].into(),
+        ..Default::default()
+    };
+
+    outline.update(update).await;
+    let symbols_by_file = outline.to_symbols_by_file(None);
+
+    assert!(
+        !outline
+            .to_file_symbols(None)
+            .iter()
+            .any(|file| file.path == "a.rs")
+    );
+    assert!(!symbols_by_file.contains_key(&added_path));
+    assert_eq!(
+        symbols_by_file[&modified_path].symbols().unwrap()[0].name,
+        "new_symbol"
+    );
+}
 #[test]
 fn multiline_block_comments_count_each_physical_line() {
     let temp_dir = TempDir::new().unwrap();

@@ -193,7 +193,7 @@ impl Outline {
         }
 
         if let Some(updated_outlines) = parse_symbols_for_files(files_metadata).await {
-            let mut budget_exhausted = false;
+            let mut new_file_budget_exhausted = false;
             for (metadata, existing, outline) in updated_outlines {
                 if existing
                     && let Some(previous_outline) =
@@ -205,8 +205,12 @@ impl Outline {
                 }
                 let outline_bytes = retained_file_outline_bytes(&outline);
                 let next_retained_bytes = self.retained_outline_bytes.saturating_add(outline_bytes);
-                if budget_exhausted || next_retained_bytes > MAX_OUTLINE_TOTAL_BYTES {
-                    budget_exhausted = true;
+                if (!existing && new_file_budget_exhausted)
+                    || next_retained_bytes > MAX_OUTLINE_TOTAL_BYTES
+                {
+                    if !existing {
+                        new_file_budget_exhausted = true;
+                    }
                     continue;
                 }
 
