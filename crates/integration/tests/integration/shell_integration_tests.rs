@@ -79,8 +79,10 @@ integration_tests! {
     test_zsh_bootstraps_with_nounset_option,
 
     // Tests of ssh wrapper logic from bootstrap script.
-    test_ssh_wrapper_into_bash,
-    test_ssh_wrapper_into_zsh,
+    test_legacy_ssh_into_bash,
+    test_legacy_ssh_into_zsh,
+    test_tmux_ssh_into_bash,
+    test_tmux_ssh_into_zsh,
     // TODO(vorporeal): Reenable fish once we actually support it as a remote
     // shell.
     // test_ssh_into_fish,

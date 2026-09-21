@@ -751,13 +751,19 @@ impl<S> TerminalManager<S> {
                     .contains(&ContextChipKind::NodeVersion)
         };
 
-        // `enable_ssh_warpification` is the single source of truth for whether the SSH
-        // wrapper is active. The bootstrap scripts check `WARP_USE_SSH_WRAPPER` (derived
-        // from this value) before invoking `warp_ssh_helper`, which spawns the ControlMaster
-        // and opens agent-protocol channels.
-        let enable_ssh_wrapper = *WarpifySettings::as_ref(ctx)
-            .enable_ssh_warpification
-            .value();
+        // PoC: force the tmux-based SSH path and disable the original ControlMaster wrapper.
+        const FORCE_PERSISTENT_SSH_TMUX_POC: bool = true;
+        // The TMUX SSH wrapper supercedes the original ControlMaster wrapper.
+        let enable_ssh_wrapper = if FORCE_PERSISTENT_SSH_TMUX_POC {
+            false
+        } else if FeatureFlag::SSHTmuxWrapper.is_enabled() {
+            *WarpifySettings::as_ref(ctx)
+                .enable_ssh_warpification
+                .value()
+                && !*WarpifySettings::as_ref(ctx).use_ssh_tmux_wrapper.value()
+        } else {
+            *SshSettings::as_ref(ctx).enable_legacy_ssh_wrapper.value()
+        };
 
         // Only meaningful when the legacy ControlMaster wrapper is active.
         let reuse_ssh_control_master = enable_ssh_wrapper

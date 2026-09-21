@@ -32,9 +32,10 @@ fn new_block_list(event_proxy: ChannelEventListener, mode: TypeaheadMode) -> Blo
         None,
         None,
         None,
+        false,
         None,
     )
-    .merge_from_bootstrapped_value(bootstrapped_value.clone());
+    .merge_from_bootstrapped_value(bootstrapped_value.clone(), false);
 
     block_list.bootstrapped(bootstrapped_value);
     block_list.early_output_mut().init_session(&session_info);

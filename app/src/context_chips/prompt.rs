@@ -333,6 +333,7 @@ impl PromptConfiguration {
             ContextChipKind::CondaEnvironment,
             ContextChipKind::VirtualEnvironment,
             ContextChipKind::Ssh,
+            ContextChipKind::TmuxWorkspace,
             ContextChipKind::Subshell,
             ContextChipKind::NodeVersion,
             ContextChipKind::WorkingDirectory,

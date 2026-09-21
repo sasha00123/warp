@@ -50,6 +50,7 @@ use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChange
 use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::input::{MenuPositioning, MenuPositioningProvider};
 use crate::terminal::model::session::SessionType;
+use crate::terminal::model::tmux::commands::{TmuxCommand, TmuxWorkspace};
 use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::ui_components::blended_colors;
@@ -622,6 +623,10 @@ pub enum DisplayChipKind {
         directory_fetcher: ModelHandle<DirectoryFetcher>,
     },
     Ssh,
+    TmuxWorkspace {
+        menu_open: bool,
+        menu: ViewHandle<DisplayChipMenu>,
+    },
     Subshell,
     VirtualEnvironment,
     CondaEnvironment,
@@ -651,6 +656,7 @@ impl DisplayChipKind {
             DisplayChipKind::WorkingDirectory { menu_open, .. } => *menu_open,
             DisplayChipKind::NodeVersion { popup_open, .. } => *popup_open,
             DisplayChipKind::GitBranch { menu_open, .. } => *menu_open,
+            DisplayChipKind::TmuxWorkspace { menu_open, .. } => *menu_open,
             DisplayChipKind::GithubPullRequest
             | DisplayChipKind::GitBranchStatus { .. }
             | DisplayChipKind::GitDiffStats { .. }
@@ -907,6 +913,7 @@ impl DisplayChip {
                         me.close_git_branch_menu(ctx);
                         ctx.notify();
                     }
+                    PromptDisplayMenuEvent::SecondaryMenuAction(_) => {}
                     PromptDisplayMenuEvent::CloseMenu => {
                         me.close_git_branch_menu(ctx);
                         ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: false });
@@ -1030,6 +1037,7 @@ impl DisplayChip {
                             }
                         }
                     }
+                    PromptDisplayMenuEvent::SecondaryMenuAction(_) => {}
                     PromptDisplayMenuEvent::CloseMenu => {
                         me.close_working_directory_menu(ctx);
                         ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: false });
@@ -1045,6 +1053,83 @@ impl DisplayChip {
                 }
             }
             ContextChipKind::Ssh => DisplayChipKind::Ssh,
+            ContextChipKind::TmuxWorkspace => {
+                let tmux_items: Vec<TmuxPaneTarget> = Vec::new();
+                let new_workspace = FixedFooter::new(Arc::new(TmuxPaneTarget::NewWorkspace));
+
+                let menu_view = ctx.add_typed_action_view(move |ctx| {
+                    DisplayChipMenu::new(
+                        tmux_items,
+                        Some(new_workspace),
+                        ChipMenuType::TmuxWorkspaces,
+                        ctx,
+                    )
+                });
+
+                ctx.subscribe_to_view(&menu_view, |me, _, event, ctx| match event {
+                    PromptDisplayMenuEvent::MenuAction(generic_event) => {
+                        let action_item = generic_event.action_item.clone();
+                        let Some(tmux_target) =
+                            action_item.as_any().downcast_ref::<TmuxPaneTarget>()
+                        else {
+                            log::warn!("MenuAction event should contain TmuxPaneTarget action item");
+                            return;
+                        };
+
+                        ctx.emit(PromptDisplayChipEvent::RunTmuxCommand(
+                            tmux_target.tmux_command(),
+                        ));
+                        if let DisplayChipKind::TmuxWorkspace { menu_open, menu } =
+                            &mut me.display_chip_kind
+                        {
+                            *menu_open = false;
+                            menu.update(ctx, |menu, _| {
+                                menu.reset_selected_index();
+                            });
+                        }
+                        ctx.notify();
+                    }
+                    PromptDisplayMenuEvent::SecondaryMenuAction(generic_event) => {
+                        let action_item = generic_event.action_item.clone();
+                        let Some(tmux_target) =
+                            action_item.as_any().downcast_ref::<TmuxPaneTarget>()
+                        else {
+                            log::warn!("SecondaryMenuAction event should contain TmuxPaneTarget action item");
+                            return;
+                        };
+
+                        if let Some(command) = tmux_target.close_tmux_command() {
+                            ctx.emit(PromptDisplayChipEvent::RunTmuxCommand(command));
+                        }
+                        if let DisplayChipKind::TmuxWorkspace { menu_open, menu } =
+                            &mut me.display_chip_kind
+                        {
+                            *menu_open = false;
+                            menu.update(ctx, |menu, _| {
+                                menu.reset_selected_index();
+                            });
+                        }
+                        ctx.notify();
+                    }
+                    PromptDisplayMenuEvent::CloseMenu => {
+                        if let DisplayChipKind::TmuxWorkspace { menu_open, menu } =
+                            &mut me.display_chip_kind
+                        {
+                            *menu_open = false;
+                            menu.update(ctx, |menu, _| {
+                                menu.reset_selected_index();
+                            });
+                        }
+                        ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: false });
+                        ctx.notify();
+                    }
+                });
+
+                DisplayChipKind::TmuxWorkspace {
+                    menu_open: false,
+                    menu: menu_view,
+                }
+            }
             ContextChipKind::Subshell => DisplayChipKind::Subshell,
             ContextChipKind::VirtualEnvironment => DisplayChipKind::VirtualEnvironment,
             ContextChipKind::CondaEnvironment => DisplayChipKind::CondaEnvironment,
@@ -1245,6 +1330,12 @@ impl DisplayChip {
                     return true;
                 }
             }
+            DisplayChipKind::TmuxWorkspace { menu_open, menu } => {
+                if *menu_open {
+                    ctx.focus(menu);
+                    return true;
+                }
+            }
             DisplayChipKind::GitDiffStats { .. }
             | DisplayChipKind::GitBranchStatus { .. }
             | DisplayChipKind::Text
@@ -1404,6 +1495,79 @@ impl DisplayChip {
             hover
                 .on_click(|ctx, _app, _position| {
                     ctx.dispatch_typed_action(DisplayChipAction::OpenBranchSelector);
+                })
+                .with_cursor(Cursor::PointingHand)
+                .finish()
+        };
+
+        let mut stack = Stack::new().with_child(hover);
+
+        if menu_open {
+            let positioning = self.menu_positioning_provider.menu_position(app);
+            let (parent_anchor, child_anchor) = Self::positioning_to_anchors(positioning);
+            let offset = match positioning {
+                MenuPositioning::BelowInputBox => vec2f(0., 4.),
+                MenuPositioning::AboveInputBox => vec2f(0., -4.),
+            };
+            stack.add_positioned_overlay_child(
+                ChildView::new(menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    offset,
+                    ParentOffsetBounds::WindowByPosition,
+                    parent_anchor,
+                    child_anchor,
+                ),
+            );
+        }
+
+        stack.finish()
+    }
+
+    fn tmux_workspace_chip(
+        &self,
+        menu: &ViewHandle<DisplayChipMenu>,
+        menu_open: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let appearance = Appearance::as_ref(app);
+        let font_color = if self.is_in_agent_view {
+            agent_view_chip_color(appearance)
+        } else {
+            appearance.theme().ansi_fg_blue()
+        };
+
+        let is_interactive =
+            !self.is_shared_session_viewer && !self.is_cli_agent_session_active(app);
+        let is_in_agent_view = self.is_in_agent_view;
+        let chip_text = self.text.clone();
+        let hover = Hoverable::new(self.mouse_state.clone(), move |state| {
+            let hovered = state.is_hovered() && is_interactive;
+            let mut config =
+                UdiChipConfig::new_with_icon(Icon::Terminal, font_color, chip_text.clone())
+                    .with_hovered(hovered);
+            if is_in_agent_view {
+                config = config.for_agent_view();
+            }
+            let chip_element = render_udi_chip(config, appearance);
+
+            let mut stack = Stack::new().with_child(chip_element);
+            if state.is_hovered() && is_interactive && !menu_open {
+                let tool_tip = appearance
+                    .ui_builder()
+                    .tool_tip("Switch tmux workspace".to_string())
+                    .build()
+                    .finish();
+                stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
+            }
+            stack.finish()
+        });
+
+        let hover = if !is_interactive {
+            hover.finish()
+        } else {
+            hover
+                .on_click(|ctx, _app, _position| {
+                    ctx.dispatch_typed_action(DisplayChipAction::ToggleMenu);
                 })
                 .with_cursor(Cursor::PointingHand)
                 .finish()
@@ -1970,6 +2134,9 @@ impl DisplayChip {
                 ..
             } => Some(self.working_directory_chip(*show_menu, menu, *menu_open, app)),
             DisplayChipKind::Ssh => Some(self.ssh_chip(app)),
+            DisplayChipKind::TmuxWorkspace { menu, menu_open } => {
+                Some(self.tmux_workspace_chip(menu, *menu_open, app))
+            }
             DisplayChipKind::Subshell => Some(self.subshell_chip(app)),
             DisplayChipKind::VirtualEnvironment => Some(self.virtual_environment_chip(app)),
             DisplayChipKind::NodeVersion { popup, popup_open } => {
@@ -2033,6 +2200,91 @@ impl View for DisplayChip {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum TmuxPaneTarget {
+    NewWorkspace,
+    Workspace(TmuxWorkspace),
+}
+
+impl TmuxPaneTarget {
+    fn tmux_command(&self) -> TmuxCommand {
+        match self {
+            Self::NewWorkspace => TmuxCommand::NewWorkspace,
+            Self::Workspace(workspace) => TmuxCommand::SelectWorkspace {
+                window_id: workspace.window_id,
+                pane_id: workspace.pane_id,
+            },
+        }
+    }
+
+    fn close_tmux_command(&self) -> Option<TmuxCommand> {
+        match self {
+            Self::NewWorkspace => None,
+            Self::Workspace(workspace) => Some(TmuxCommand::KillWorkspace {
+                window_id: workspace.window_id,
+            }),
+        }
+    }
+
+    fn status_label(workspace: &TmuxWorkspace) -> &'static str {
+        if workspace.pane_dead {
+            "exited"
+        } else {
+            match workspace.command.as_str() {
+                "bash" | "zsh" | "fish" | "sh" | "tmux" | "" => "idle",
+                _ => "running",
+            }
+        }
+    }
+}
+
+impl GenericMenuItem for TmuxPaneTarget {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn name(&self) -> String {
+        match self {
+            Self::NewWorkspace => "New page".to_string(),
+            Self::Workspace(workspace) => {
+                let active = if workspace.active { "* " } else { "" };
+                let exit = workspace
+                    .exit_status
+                    .map(|status| format!(" ({status})"))
+                    .unwrap_or_default();
+                format!(
+                    "{active}{}  [{}{}]  {}  {}  ({} pane{})",
+                    workspace.name,
+                    Self::status_label(workspace),
+                    exit,
+                    workspace.command,
+                    workspace.path,
+                    workspace.pane_count,
+                    if workspace.pane_count == 1 { "" } else { "s" }
+                )
+            }
+        }
+    }
+
+    fn icon(&self, _app: &AppContext) -> Option<Icon> {
+        Some(match self {
+            Self::NewWorkspace => Icon::Plus,
+            Self::Workspace(_) => Icon::Terminal,
+        })
+    }
+
+    fn action_data(&self) -> String {
+        match self {
+            Self::NewWorkspace => "new".to_string(),
+            Self::Workspace(workspace) => format!("@{}", workspace.window_id),
+        }
+    }
+
+    fn supports_secondary_action(&self) -> bool {
+        matches!(self, Self::Workspace(_))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PromptChipShellCommand {
     GitCheckout {
@@ -2067,11 +2319,29 @@ pub enum PromptDisplayChipEvent {
     OpenConversationHistory,
     OpenCommandPaletteFiles,
     TryExecuteCommand(PromptChipShellCommand),
+    RunTmuxCommand(TmuxCommand),
     RunAgentQuery(String),
     OpenAIDocument {
         document_id: AIDocumentId,
         document_version: AIDocumentVersion,
     },
+}
+
+impl DisplayChip {
+    pub fn update_tmux_workspaces(
+        &mut self,
+        workspaces: Vec<TmuxWorkspace>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if let DisplayChipKind::TmuxWorkspace { menu, .. } = &self.display_chip_kind {
+            let items = workspaces
+                .into_iter()
+                .map(TmuxPaneTarget::Workspace)
+                .collect();
+            menu.update(ctx, |menu, ctx| menu.update_menu_items(items, ctx));
+            ctx.notify();
+        }
+    }
 }
 
 impl TypedActionView for DisplayChip {
@@ -2090,6 +2360,13 @@ impl TypedActionView for DisplayChip {
                 DisplayChipKind::WorkingDirectory {
                     menu_open, menu, ..
                 } => {
+                    *menu_open = false;
+                    menu.update(ctx, |menu, _| {
+                        menu.reset_selected_index();
+                    });
+                    ctx.notify();
+                }
+                DisplayChipKind::TmuxWorkspace { menu_open, menu } => {
                     *menu_open = false;
                     menu.update(ctx, |menu, _| {
                         menu.reset_selected_index();
@@ -2142,6 +2419,22 @@ impl TypedActionView for DisplayChip {
                                 ctx
                             );
                         }
+                        ctx.notify();
+                    }
+                    DisplayChipKind::TmuxWorkspace { menu, menu_open } => {
+                        *menu_open = !*menu_open;
+                        let is_menu_open = *menu_open;
+                        if is_menu_open {
+                            ctx.emit(PromptDisplayChipEvent::RunTmuxCommand(
+                                TmuxCommand::ListWorkspaces,
+                            ));
+                            ctx.focus(menu);
+                        } else {
+                            menu.update(ctx, |menu, _| {
+                                menu.reset_selected_index();
+                            });
+                        }
+                        ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: is_menu_open });
                         ctx.notify();
                     }
                     DisplayChipKind::WorkingDirectory {

@@ -75,6 +75,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AgentModeWorkflows,
         #[cfg(feature = "ai_rules")]
         FeatureFlag::AIRules,
+        #[cfg(feature = "ssh_tmux_wrapper")]
+        FeatureFlag::SSHTmuxWrapper,
         #[cfg(feature = "shell_selector")]
         FeatureFlag::ShellSelector,
         #[cfg(feature = "integration_command")]

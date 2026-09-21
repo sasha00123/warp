@@ -199,6 +199,8 @@ pub enum ContextChipKind {
     // We originally had two different chips for different input types, this has since been consolidated.
     #[serde(alias = "RemoteLogin")]
     Ssh,
+    /// A chip that appears when the active session is backed by tmux control mode.
+    TmuxWorkspace,
     Subshell,
     /// A chip that shows the plan and todo list for the current conversation.
     AgentPlanAndTodoList,
@@ -354,6 +356,11 @@ impl ContextChipKind {
                 builtins::ssh_session,
                 RefreshConfig::OnDemandOnly,
             )),
+            Self::TmuxWorkspace => Some(ContextChip::builtin(
+                "Tmux Workspace",
+                builtins::tmux_workspace,
+                RefreshConfig::OnDemandOnly,
+            )),
             Self::Subshell => Some(ContextChip::builtin(
                 "subshell",
                 builtins::subshell,
@@ -418,6 +425,7 @@ impl ContextChipKind {
             Self::SvnBranch => ChipValue::Text("svn-feature-branch".to_string()),
             Self::SvnDirtyItems => ChipValue::Text("3".to_string()),
             Self::Ssh => ChipValue::Text("alice@127.0.0.1".to_string()),
+            Self::TmuxWorkspace => ChipValue::Text("tmux".to_string()),
             Self::Subshell => ChipValue::Text("bash".to_string()),
             Self::AgentPlanAndTodoList => ChipValue::Text("Plan and Todo List".to_string()),
         }
@@ -451,6 +459,7 @@ impl ContextChipKind {
             Self::SvnBranch => prompt_colors.input_prompt_branch,
             Self::SvnDirtyItems => prompt_colors.input_prompt_svn,
             Self::Ssh => prompt_colors.input_prompt_ssh,
+            Self::TmuxWorkspace => prompt_colors.input_prompt_subshell,
             Self::Subshell => prompt_colors.input_prompt_subshell,
             Self::AgentPlanAndTodoList => prompt_colors.input_prompt_agent_mode_hint,
             Self::Custom { .. } => ColorU::new(255, 255, 255, 255),
@@ -537,9 +546,10 @@ impl ContextChipKind {
             Self::Hostname => Some(Icon::Laptop),
             Self::Date => Some(Icon::CalendarDate),
             Self::Time12 | Self::Time24 => Some(Icon::Clock),
-            Self::VirtualEnvironment | Self::CondaEnvironment | Self::Subshell => {
-                Some(Icon::Terminal)
-            }
+            Self::VirtualEnvironment
+            | Self::CondaEnvironment
+            | Self::Subshell
+            | Self::TmuxWorkspace => Some(Icon::Terminal),
             Self::NodeVersion => Some(Icon::NodeJS),
             Self::ShellGitBranch | Self::GitBranchStatus | Self::SvnBranch => Some(Icon::GitBranch),
             Self::GitDiffStats | Self::SvnDirtyItems => Some(Icon::File),
@@ -565,6 +575,7 @@ pub fn available_chips() -> Vec<ContextChipKind> {
         ContextChipKind::Username,
         ContextChipKind::Hostname,
         ContextChipKind::Ssh,
+        ContextChipKind::TmuxWorkspace,
         ContextChipKind::ShellGitBranch,
         ContextChipKind::GitBranchStatus,
         ContextChipKind::GitDiffStats,

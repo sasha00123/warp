@@ -24,6 +24,7 @@ use crate::completer::SessionContext;
 use crate::context_chips::display_chip::{DisplayChipAction, PromptChipShellCommand};
 use crate::settings::InputSettings;
 use crate::terminal::input::MenuPositioningProvider;
+use crate::terminal::model::tmux::commands::{TmuxCommand, TmuxWorkspace};
 use crate::terminal::model_events::ModelEventDispatcher;
 
 /// Enum introduced to abstract over the different row types we use for the prompt display,
@@ -88,6 +89,7 @@ pub enum PromptDisplayEvent {
     OpenCommandPaletteFiles,
     RunAgentQuery(String),
     TryExecuteCommand(PromptChipShellCommand),
+    RunTmuxCommand(TmuxCommand),
     OpenAIDocument {
         document_id: AIDocumentId,
         document_version: AIDocumentVersion,
@@ -162,6 +164,19 @@ impl PromptDisplay {
         self.display_chips
             .iter()
             .any(|chip| chip.as_ref(app).display_chip_kind().has_open_menu())
+    }
+
+    pub fn update_tmux_workspaces(
+        &mut self,
+        workspaces: Vec<TmuxWorkspace>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        for chip in &self.display_chips {
+            let workspaces = workspaces.clone();
+            chip.update(ctx, |chip, ctx| {
+                chip.update_tmux_workspaces(workspaces, ctx)
+            });
+        }
     }
 
     fn check_if_chip_values_have_changed(
@@ -266,6 +281,10 @@ impl PromptDisplay {
                 }
                 PromptDisplayChipEvent::TryExecuteCommand(cmd) => {
                     ctx.emit(PromptDisplayEvent::TryExecuteCommand(cmd.clone()));
+                    ctx.notify();
+                }
+                PromptDisplayChipEvent::RunTmuxCommand(command) => {
+                    ctx.emit(PromptDisplayEvent::RunTmuxCommand(command.clone()));
                     ctx.notify();
                 }
                 PromptDisplayChipEvent::OpenAIDocument {
