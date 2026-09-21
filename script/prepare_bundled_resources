@@ -100,12 +100,12 @@ ADDITIONAL_LICENSES=(
 if [ -z "$NO_LICENSES" ]; then
   LICENSES_OUTPUT="$DEST_DIR/THIRD_PARTY_LICENSES.txt"
   echo "Generating third-party licenses at $LICENSES_OUTPUT"
-  cargo about generate \
-      --workspace \
-      --manifest-path "$REPO_ROOT/Cargo.toml" \
-      -c "$REPO_ROOT/about.toml" \
-      -o "$LICENSES_OUTPUT" \
-      "$REPO_ROOT/about.hbs"
+  ABOUT_ARGS=(--workspace --manifest-path "$REPO_ROOT/Cargo.toml"
+      -c "${CARGO_ABOUT_CONFIG:-$REPO_ROOT/about.toml}" -o "$LICENSES_OUTPUT")
+  if [[ "${CARGO_ABOUT_FAIL:-0}" == 1 ]]; then
+    ABOUT_ARGS+=(--fail)
+  fi
+  cargo about generate "${ABOUT_ARGS[@]}" "$REPO_ROOT/about.hbs"
 
   # Append additional (non-Cargo) third-party licenses.
   for entry in "${ADDITIONAL_LICENSES[@]}"; do

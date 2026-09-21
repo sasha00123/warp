@@ -1,0 +1,75 @@
+name: Personal Release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'New immutable numeric version, e.g. 2026.9.19'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: personal-release
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.repository_owner == 'sasha00123' && github.ref == 'refs/heads/personal/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - run: python3 distribution/verify.py
+      - name: Refuse invalid versions and existing releases or tags
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python3 -c 'import os,re; assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", os.environ["VERSION"])'
+          gh api "repos/$GH_REPO/git/matching-refs/tags/personal-v$VERSION" > refs.json
+          python3 -c 'import json,os; tag="refs/tags/personal-v"+os.environ["VERSION"]; assert all(r["ref"] != tag for r in json.load(open("refs.json"))), "Version tag already exists"'
+          gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > releases.json
+          python3 -c 'import json,os; tag="personal-v"+os.environ["VERSION"]; assert all(r["tag_name"] != tag for page in json.load(open("releases.json")) for r in page), "Version release or draft already exists"'
+  build:
+    needs: validate
+    uses: ./.github/workflows/personal-build.yml
+    with:
+      source_ref: ${{ github.sha }}
+      version: ${{ inputs.version }}
+  publish:
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          submodules: recursive
+          lfs: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: personal-macos-*
+          merge-multiple: true
+          path: dist
+      - name: Preserve corresponding dependency sources
+        run: python3 distribution/preserve_sources.py
+      - name: Assemble immutable release assets
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: python3 distribution/release.py "$VERSION" "$SOURCE_COMMIT"
+      - name: Create draft release
+        env:
+          VERSION: ${{ inputs.version }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release create "personal-v$VERSION" --repo "$GH_REPO" \
+            --target "$SOURCE_COMMIT" --draft --title "Warp Custom $VERSION" \
+            --notes-file dist/RELEASE_NOTES.md dist/*.zip dist/*-source.tar.gz dist/SHA256SUMS dist/homebrew.json
