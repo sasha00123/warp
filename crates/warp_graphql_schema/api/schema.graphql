@@ -79,6 +79,29 @@ type AIConversationFormat {
   hasTaskList: Boolean!
 }
 
+type AICreditAvailability {
+  available: Boolean!
+  creditSource: AICreditAvailabilitySource
+  denialReason: AICreditAvailabilityDenialReason!
+}
+
+enum AICreditAvailabilityDenialReason {
+  DELINQUENT
+  ENTERPRISE_PER_USER_SPEND_LIMIT_HIT
+  ENTERPRISE_TEAM_SPEND_LIMIT_HIT
+  ENTERPRISE_WORKSPACE_SPEND_LIMIT_HIT
+  NONE
+  OUT_OF_CREDITS
+}
+
+enum AICreditAvailabilitySource {
+  AMBIENT_BONUS_GRANT
+  BASE_LIMIT
+  BONUS_GRANT
+  OVERAGE
+  PAYG
+}
+
 enum AICreditsUsageAndCostSubjectType {
   SERVICE_ACCOUNT
   TEAM
@@ -315,11 +338,14 @@ enum AgentTaskState {
 
 """Status message for an agent task."""
 type AgentTaskStatusMessage {
+  """Structured platform error information, when the status represents an error."""
+  error: PlatformErrorInfo
   """
   Machine-readable error code from the platform error catalog.
   Only present when the status message represents an error.
+  Deprecated in favor of error.
   """
-  errorCode: PlatformErrorCode
+  errorCode: PlatformErrorCode @deprecated(reason: "Use error instead")
 
   """The status message text."""
   message: String!
@@ -331,19 +357,22 @@ type AgentTaskStatusMessage {
   retrying without addressing the underlying cause (e.g. insufficient credits,
   invalid configuration) will not succeed.
   """
-  retryable: Boolean
+  retryable: Boolean @deprecated(reason: "Use error.retryable instead")
 }
 
 input AgentTaskStatusMessageInput {
+  """Structured platform error information supplied by the client."""
+  error: PlatformErrorInput
   """
   Machine-readable error code from the platform error catalog.
   Only set when the status message represents an error.
-  The server derives retryability from the error code.
+  Deprecated in favor of error.
   """
-  errorCode: PlatformErrorCode
+  errorCode: PlatformErrorCode @deprecated(reason: "Use error instead")
 
   """The status message text."""
   message: String!
+
 }
 
 enum AgentVisibility {
@@ -555,7 +584,15 @@ type BonusGrant {
   reason: String!
   requestCreditsGranted: Int!
   requestCreditsRemaining: Int!
+  scope: BonusGrantScope!
   userFacingMessage: String
+}
+
+"""The credit pool a bonus grant belongs to."""
+enum BonusGrantScope {
+  USER
+  TEAM
+  WORKSPACE
 }
 
 type BonusGrantSpendingInfo {
@@ -855,6 +892,8 @@ type ConversationUsageMetadata {
 
   """The total number of platform credits spent so far in the conversation."""
   platformCreditsSpent: Float!
+  """The cumulative provider cost in US cents, when available."""
+  totalProviderCostInCents: Float
   summarized: Boolean!
 
   """
@@ -923,6 +962,7 @@ input CreateFileArtifactUploadTargetInput {
   mimeType: String
   runId: ID
   sizeBytes: Int
+  title: String
 }
 
 type CreateFileArtifactUploadTargetOutput implements Response {
@@ -1186,6 +1226,13 @@ type DiscoverableTeamData {
   teamUid: ID!
 }
 
+type DiscoverableWorkspaceData {
+  memberCount: Int!
+  name: String!
+  openTeams: [DiscoverableTeamData!]!
+  workspaceUid: ID!
+}
+
 enum DisplaySetting {
   COMMAND
   COMMAND_AND_OUTPUT
@@ -1207,6 +1254,7 @@ input DomainCaptureSettingsInput {
 type EmailInvite {
   email: String!
   expired: Boolean!
+  teamUid: ID
 }
 
 enum EmbeddingConfig {
@@ -1333,12 +1381,16 @@ enum Experiment {
   FREE_USER_NO_AI_CONTROL
   FREE_USER_NO_AI_EXPERIMENT
   LINUX_LAUNCH_EXPERIMENT
+  MACOS_RUNNERS_CONTROL
+  MACOS_RUNNERS_EXPERIMENT
   MULTI_AGENT_CONTROL
   MULTI_AGENT_EXPERIMENT
   MULTI_ARM_REVERSE_AI_TRIAL_CONTROL
   MULTI_ARM_REVERSE_AI_TRIAL_FIVE_HUNDRED_REQUESTS
   MULTI_ARM_REVERSE_AI_TRIAL_ONE_THOUSAND_FIVE_HUNDRED_REQUESTS
   MULTI_ARM_REVERSE_AI_TRIAL_ONE_THOUSAND_REQUESTS
+  ONBOARDING_CHOOSE_HOW_TO_START_CONTROL
+  ONBOARDING_CHOOSE_HOW_TO_START_EXPERIMENT
   OVERLIMIT_AGENT_MODE_CONTROL
   OVERLIMIT_AGENT_MODE_GRADUAL_ROLLOUT_EXPERIMENT
   OZ_MULTI_HARNESS_CONTROL
@@ -1942,6 +1994,16 @@ type IssueTaskIdentityTokenOutput implements Response {
 }
 
 union IssueTaskIdentityTokenResult = IssueTaskIdentityTokenOutput | UserFacingError
+input JoinTeamInWorkspaceInput {
+  teamUid: ID!
+}
+
+type JoinTeamInWorkspaceOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union JoinTeamInWorkspaceResult = JoinTeamInWorkspaceOutput | UserFacingError
 
 input JoinTeamWithTeamDiscoveryInput {
   entrypoint: TeamDiscoveryEntrypoint!
@@ -1954,6 +2016,18 @@ type JoinTeamWithTeamDiscoveryOutput implements Response {
 }
 
 union JoinTeamWithTeamDiscoveryResult = JoinTeamWithTeamDiscoveryOutput | UserFacingError
+
+input JoinWorkspaceFromDiscoveryInput {
+  teamUid: ID
+  workspaceUid: ID!
+}
+
+type JoinWorkspaceFromDiscoveryOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union JoinWorkspaceFromDiscoveryResult = JoinWorkspaceFromDiscoveryOutput | UserFacingError
 
 input LeaveObjectInput {
   objectUid: ID!
@@ -2296,6 +2370,25 @@ type ManagedByokByoePolicy {
   enabled: Boolean!
 }
 
+"""
+A managed secret value representing a container registry credential. The password is
+never exposed here - only the host and username are readable back.
+"""
+type ManagedSecretDockerRegistryValue {
+  registryHost: String!
+  username: String!
+}
+
+"""
+A managed secret value representing an AWS ECR credential backed by an IAM role. Neither
+field is secret - Warp assumes the role fresh at dispatch time rather than storing a
+password - so both are readable back in full.
+"""
+type ManagedSecretAwsEcrCredentialValue {
+  registryHost: String!
+  roleArn: String!
+}
+
 """A managed secret value representing an OpenAI API key."""
 type ManagedSecretOpenAiApiKeyValue {
   apiKey: String!
@@ -2322,12 +2415,14 @@ enum ManagedSecretType {
   ANTHROPIC_API_KEY
   ANTHROPIC_BEDROCK_ACCESS_KEY
   ANTHROPIC_BEDROCK_API_KEY
+  AWS_ECR_CREDENTIAL
+  DOCKER_REGISTRY
   DOTENVX
   OPENAI_API_KEY
   RAW_VALUE
 }
 
-union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretRawValue
+union ManagedSecretValue = ManagedSecretAnthropicApiKeyValue | ManagedSecretAnthropicBedrockAccessKeyValue | ManagedSecretAnthropicBedrockApiKeyValue | ManagedSecretAwsEcrCredentialValue | ManagedSecretDockerRegistryValue | ManagedSecretOpenAiApiKeyValue | ManagedSecretRawValue
 
 input ManagedSecretsInput {
   """Pagination cursor, currently unused."""
@@ -2397,6 +2492,10 @@ type MoveObjectOutput implements Response {
 union MoveObjectResult = MoveObjectOutput | UserFacingError
 
 type MultiAdminPolicy {
+  enabled: Boolean!
+}
+
+type NativeWorkspacesPolicy {
   enabled: Boolean!
 }
 
@@ -2588,6 +2687,13 @@ Used in task status messages to identify the class of error.
 See platformerrors package for the canonical definitions.
 """
 enum PlatformErrorCode {
+  """MAA server explicitly reported a terminal response stream failure."""
+  AGENT_STREAM_FAILURE
+
+  """
+  MAA response stream terminally failed because of a transport or EOF error.
+  """
+  AGENT_STREAM_NETWORK_ERROR
   """Request lacks valid authentication credentials (e.g. invalid API key)."""
   AUTHENTICATION_REQUIRED
 
@@ -2658,6 +2764,7 @@ type PricingInfo {
   addonCreditsOptions: [AddonCreditsOption!]!
   overages: OveragesPricing!
   plans: [PlanPricing!]!
+  promotionMessage: String
 }
 
 type PricingInfoOutput implements Response {
@@ -2700,19 +2807,32 @@ type PullRequestArtifact {
 
 type PurchaseAddOnCreditsPolicy {
   enabled: Boolean!
+  premiumEnabled: Boolean!
+  pricePremiumBps: Int!
+}
+
+"""
+The purchase could not be charged synchronously because the customer has no
+saved payment method. The user must complete the purchase in the browser at
+`checkoutUrl`; credits are granted via webhook after checkout completes.
+"""
+type PurchaseAddonCreditsCheckoutOutput implements Response {
+  checkoutUrl: String!
+  responseContext: ResponseContext!
 }
 
 input PurchaseAddonCreditsInput {
   credits: Int!
-  teamUid: ID!
+  teamUid: ID
 }
 
+"""The purchase was charged synchronously and credits were granted."""
 type PurchaseAddonCreditsOutput implements Response {
   responseContext: ResponseContext!
   success: Boolean!
 }
 
-union PurchaseAddonCreditsResult = PurchaseAddonCreditsOutput | UserFacingError
+union PurchaseAddonCreditsResult = PurchaseAddonCreditsCheckoutOutput | PurchaseAddonCreditsOutput | UserFacingError
 
 """
 The request contains a UTC timestamp of when the action occurred. The JSON data
@@ -2782,6 +2902,18 @@ type RemoveUserFromTeamOutput implements Response {
 }
 
 union RemoveUserFromTeamResult = RemoveUserFromTeamOutput | UserFacingError
+input RemoveUserFromWorkspaceInput {
+  entrypoint: CloudObjectEventEntrypoint!
+  userUid: ID!
+  workspaceUid: ID!
+}
+
+type RemoveUserFromWorkspaceOutput implements Response {
+  responseContext: ResponseContext!
+  success: Boolean!
+}
+
+union RemoveUserFromWorkspaceResult = RemoveUserFromWorkspaceOutput | UserFacingError
 
 input RenameTeamInput {
   newName: String!
@@ -2892,6 +3024,13 @@ type ResetInviteLinksOutput implements Response {
 }
 
 union ResetInviteLinksResult = ResetInviteLinksOutput | UserFacingError
+type TuiOnboardingMarkersOutput implements Response {
+  firstZeroStateShown: Boolean!
+  firstCreditGateShown: Boolean!
+  responseContext: ResponseContext!
+}
+
+union TuiOnboardingMarkersResult = TuiOnboardingMarkersOutput | UserFacingError
 
 interface Response {
   responseContext: ResponseContext!
@@ -2933,6 +3072,7 @@ type RunnerInstanceShape {
 enum RunnerOS {
   LINUX
   MACOS
+  WINDOWS
 }
 
 """Target CPU architecture for a runner sandbox."""
@@ -3083,7 +3223,9 @@ type RootMutation {
   giveUpNotebookEditAccess(input: UpdateNotebookEditAccessInput!, requestContext: RequestContext!): UpdateNotebookEditAccessResult!
   grabNotebookEditAccess(input: UpdateNotebookEditAccessInput!, requestContext: RequestContext!): UpdateNotebookEditAccessResult!
   issueTaskIdentityToken(input: IssueTaskIdentityTokenInput!, requestContext: RequestContext!): IssueTaskIdentityTokenResult!
+  joinTeamInWorkspace(input: JoinTeamInWorkspaceInput!, requestContext: RequestContext!): JoinTeamInWorkspaceResult!
   joinTeamWithTeamDiscovery(input: JoinTeamWithTeamDiscoveryInput!, requestContext: RequestContext!): JoinTeamWithTeamDiscoveryResult!
+  joinWorkspaceFromDiscovery(input: JoinWorkspaceFromDiscoveryInput!, requestContext: RequestContext!): JoinWorkspaceFromDiscoveryResult!
 
   """The API for leaving an object as a direct guest or link-shared."""
   leaveObject(input: LeaveObjectInput!, requestContext: RequestContext!): LeaveObjectResult!
@@ -3105,6 +3247,7 @@ type RootMutation {
   in v2. Usage of the `leaveTeam` mutation in v1 will eventually be removed.
   """
   removeUserFromTeam(input: RemoveUserFromTeamInput!, requestContext: RequestContext!): RemoveUserFromTeamResult!
+  removeUserFromWorkspace(input: RemoveUserFromWorkspaceInput!, requestContext: RequestContext!): RemoveUserFromWorkspaceResult!
   renameTeam(input: RenameTeamInput!, requestContext: RequestContext!): RenameTeamResult!
   resetInviteLinks(input: ResetInviteLinksInput!, requestContext: RequestContext!): ResetInviteLinksResult!
   sendOnboardingSurveyResponses(input: SendOnboardingSurveyResponsesInput!, requestContext: RequestContext!): SendOnboardingSurveyResponsesResult!
@@ -3186,6 +3329,13 @@ type RootQuery {
 
   """Retrieve execution history for a scheduled agent."""
   scheduledAgentHistory(input: ScheduledAgentHistoryInput!, requestContext: RequestContext!): ScheduledAgentHistoryResult!
+
+  """
+  Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
+  session. Requires a workload token scoped to the run, so only the sandbox itself (not an
+  arbitrary caller) can invoke it.
+  """
+  setupFailureDebugAuthorization(input: SetupFailureDebugAuthorizationInput!, requestContext: RequestContext!): SetupFailureDebugAuthorizationResult!
   simpleIntegrations(input: SimpleIntegrationsInput!, requestContext: RequestContext!): SimpleIntegrationsResult!
   suggestCloudEnvironmentImage(input: SuggestCloudEnvironmentImageInput!, requestContext: RequestContext!): SuggestCloudEnvironmentImageResult!
 
@@ -3204,6 +3354,7 @@ type RootQuery {
   task(input: TaskInput!, requestContext: RequestContext!): TaskResult!
   taskGitCredentials(input: TaskGitCredentialsInput!, requestContext: RequestContext!): TaskGitCredentialsResult!
   taskSecrets(input: TaskSecretsInput!, requestContext: RequestContext!): TaskSecretsResult!
+  tuiOnboardingMarkers(requestContext: RequestContext!): TuiOnboardingMarkersResult!
   updatedCloudObjects(input: UpdatedCloudObjectsInput!, requestContext: RequestContext!): UpdatedCloudObjectsResult!
   user(requestContext: RequestContext!): UserResult!
   userGithubInfo(requestContext: RequestContext!): UserGithubInfoResult!
@@ -3414,6 +3565,25 @@ type SetTeamMemberRoleOutput implements Response {
 }
 
 union SetTeamMemberRoleResult = SetTeamMemberRoleOutput | UserFacingError
+
+"""
+Authorizes a REMOTE-2661 debug agent prompt against a retained environment-setup-failure
+session. Called by the sharer (the retained agent process) with its own workload token to
+verify a no-token prompt's originating participant before honoring it, since the sharer's
+local task-eligibility view cannot authenticate who is actually asking.
+"""
+input SetupFailureDebugAuthorizationInput {
+  participantFirebaseUid: String!
+  taskId: ID!
+  workloadToken: String!
+}
+
+type SetupFailureDebugAuthorizationOutput implements Response {
+  authorized: Boolean!
+  responseContext: ResponseContext!
+}
+
+union SetupFailureDebugAuthorizationResult = SetupFailureDebugAuthorizationOutput | UserFacingError
 
 type SetUserIsOnboardedOutput implements Response {
   responseContext: ResponseContext!
@@ -3647,6 +3817,17 @@ type TaskGitCredential {
 
 """Input for the taskGitCredentials query."""
 input TaskGitCredentialsInput {
+  """
+  Whether the caller can handle a response in which one forge's credential is
+  fresh and another's failed. A caller that opts in must merge the fresh
+  credentials over its existing stores rather than rebuilding them from the
+  response, since a host absent from `credentials` may simply not have been
+  refreshed this cycle. Absent or false preserves the all-or-nothing
+  behavior, so a caller that rebuilds its stores wholesale never sees a
+  partial list.
+  """
+  acceptsPartialRefresh: Boolean
+
   """The ID of the task."""
   taskId: ID!
 
@@ -3655,7 +3836,20 @@ input TaskGitCredentialsInput {
 }
 
 type TaskGitCredentialsOutput implements Response {
+  """The credentials that were freshly issued this cycle, one per host."""
   credentials: [TaskGitCredential!]!
+
+  """
+  Hosts whose credential could not be issued this cycle because of a
+  transient failure. A host listed here is distinct from one that is simply
+  absent from `credentials`: absent means the run has no repository on that
+  forge and needs no credential there, while listed here means the caller
+  should keep whatever it already has for that host and retry.
+
+  Only populated when the request set `acceptsPartialRefresh`; otherwise a
+  failure on any forge fails the whole request.
+  """
+  failedHosts: [String!]!
   responseContext: ResponseContext!
 }
 
@@ -3705,17 +3899,142 @@ type Team {
   creatorId in v1 Team type is deprecated and should not be used. Use adminUid instead.
   """
   adminUid: String! @deprecated(reason: "Use members.role to determine admin status")
+  """The team's brand color as a hex string (e.g. "#7c3aed"), if set."""
+  color: String
 
   """
   The email domain associated with the team, if one has been set by Warp staff.
   Required for features that key off the team's domain (e.g. domain capture, SSO).
   """
   domain: String
+  featureModelChoice: FeatureModelChoice!
+
+  """
+  inviteLink is the server-owned invite-by-link URL for this team. It is null
+  only when invite links are disabled for this team (`is_invite_link_enabled`
+  is false). A caller who lacks visibility into the team does not get null:
+  the query raises a NotAuthorized error instead.
+  """
+  inviteLink: String
   managedSecrets: ManagedSecretConfig
   memberSpendLimits: [MemberSpendLimit!]
   members: [TeamMember!]!
   name: String!
+  """
+  The effective settings that apply to the team, combining the workspace layer
+  with the team's own configuration. Workspace-governable groups carry an
+  indicator for whether their value is enforced by the workspace layer.
+  """
+  settings: TeamSettings!
   uid: ID!
+
+  """
+  Team visibility governs which workspace members can discover and join a team.
+  It is a new axis, orthogonal to workspace-level discoverability (is_discoverable).
+  Existing teams default to OPEN.
+  """
+  visibility: TeamVisibility!
+}
+
+enum TeamVisibility {
+  HIDDEN
+  OPEN
+  PRIVATE
+}
+
+"""
+The effective settings that apply to a team, combining the workspace layer with
+the team's own configuration. This is a curated client-side subset of the server
+`TeamSettings` type — it only defines the fields the Rust client selects.
+"""
+type TeamSettings {
+  ugcCollection: UgcCollectionSettingInfo!
+  cloudConversationStorage: AdminEnablementSettingInfo!
+  codebaseContext: AdminEnablementSettingInfo!
+  aiPermissions: AiPermissionsSettingsInfo!
+  secretRedaction: SecretRedactionSettingsInfo!
+  aiAutonomy: AiAutonomySettingsInfo!
+  linkSharing: LinkSharingSettingsInfo!
+  sandboxedAgent: SandboxedAgentSettingsInfo!
+  llmSettings: LlmSettings!
+  telemetrySettings: TelemetrySettings!
+  usageBasedPricingSettings: UsageBasedPricingSettings!
+  addonCreditsSettings: AddonCreditsSettings!
+  ambientAgentSettings: AmbientAgentSettings
+  teamByo: TeamByoSettings
+}
+
+type UgcCollectionSettingInfo {
+  value: UgcCollectionEnablementSetting!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type AdminEnablementSettingInfo {
+  value: AdminEnablementSetting!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type BooleanSettingInfo {
+  value: Boolean!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type AiAutonomySettingInfo {
+  value: AiAutonomyValue!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type WriteToPtySettingInfo {
+  value: WriteToPtyAutonomyValue!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type ComputerUseSettingInfo {
+  value: ComputerUseAutonomyValue!
+  isEnforcedByWorkspace: Boolean!
+}
+
+type StringListSettingInfo {
+  values: [String!]!
+  workspaceEntries: [String!]!
+  teamEntries: [String!]!
+}
+
+type SecretRedactionRegexListInfo {
+  values: [SecretRedactionRegex!]!
+  workspaceEntries: [SecretRedactionRegex!]!
+  teamEntries: [SecretRedactionRegex!]!
+}
+
+type AiPermissionsSettingsInfo {
+  allowAiInRemoteSessions: BooleanSettingInfo!
+  remoteSessionRegexList: StringListSettingInfo!
+}
+
+type SecretRedactionSettingsInfo {
+  enabled: BooleanSettingInfo!
+  regexes: SecretRedactionRegexListInfo!
+}
+
+type AiAutonomySettingsInfo {
+  applyCodeDiffs: AiAutonomySettingInfo!
+  readFiles: AiAutonomySettingInfo!
+  createPlans: AiAutonomySettingInfo!
+  executeCommands: AiAutonomySettingInfo!
+  writeToPty: WriteToPtySettingInfo!
+  computerUse: ComputerUseSettingInfo!
+  readFilesAllowlist: StringListSettingInfo!
+  executeCommandsAllowlist: StringListSettingInfo!
+  executeCommandsDenylist: StringListSettingInfo!
+}
+
+type LinkSharingSettingsInfo {
+  anyoneWithLinkSharingEnabled: BooleanSettingInfo!
+  directLinkSharingEnabled: BooleanSettingInfo!
+}
+
+type SandboxedAgentSettingsInfo {
+  executeCommandsDenylist: StringListSettingInfo!
 }
 
 enum TeamDiscoveryEntrypoint {
@@ -3734,6 +4053,12 @@ cannot query for certain fields, etc.
 type TeamMember {
   displayName: String
   email: String!
+
+  """
+  Whether the member's Warp account has been disabled. A disabled member keeps
+  their team membership but cannot sign in or use Warp.
+  """
+  isDisabled: Boolean!
   photoUrl: String
   role: MembershipRole!
   uid: ID!
@@ -3794,6 +4119,7 @@ type Tier {
   managedByokByoePolicy: ManagedByokByoePolicy
   multiAdminPolicy: MultiAdminPolicy
   name: String!
+  nativeWorkspacesPolicy: NativeWorkspacesPolicy
   pricing: TierPricing
   purchaseAddOnCreditsPolicy: PurchaseAddOnCreditsPolicy
   sessionSharingPolicy: SessionSharingPolicy
@@ -3985,6 +4311,26 @@ input UpdateAgentTaskInput {
   If set, the task is associated with this AI conversation UUID for follow-up messages.
   """
   conversationId: ID
+
+  """
+  True while a REMOTE-2661 debug turn is actively pinning the post-failure debug window's idle
+  timer; false once the turn ends and the timer re-arms. Display-only, and deliberately separate
+  from statusMessage and sessionDebugUntil for the same reason: a pin/unpin update must not
+  overwrite the failure text or move the deadline.
+  """
+  debugAgentActive: Boolean
+
+  """
+  When a failed run's shared session stops being held open for debugging.
+  
+  The agent process owns that window and reports this on arm and on each refresh, so the
+  value tracks a sliding deadline. It is deliberately separate from statusMessage: a refresh
+  carries only a new deadline and must not overwrite the failure text the run reported.
+  
+  Display-only. Nothing is scheduled off it; the agent process remains the sole authority on
+  when the window actually ends.
+  """
+  sessionDebugUntil: Time
 
   """If set, the task is associated with this shared session."""
   sessionId: ID
@@ -4271,6 +4617,7 @@ input UsageBasedPricingSettingsInput {
 }
 
 type UsageEntry {
+  attributedTeamUid: String
   costCents: Int!
   costType: AICreditsUsageAndCostType!
   creditsUsed: Int!
@@ -4317,6 +4664,7 @@ The User type is the primary way of interacting with our graph.
 Nearly all data is scoped to the currently logged-in user.
 """
 type User {
+  aiCreditAvailability: AICreditAvailability!
   anonymousUserInfo: AnonymousUserInfo
   availableHarnesses: AvailableHarnesses!
   billingMetadata: BillingMetadata
@@ -4333,6 +4681,7 @@ type User {
   """
   conversationUsage(days: Int, lastUpdatedEndTimestamp: Time, limit: Int): [ConversationUsage!]!
   discoverableTeams: [DiscoverableTeamData!]!
+  discoverableWorkspaces: [DiscoverableWorkspaceData!]!
 
   """
   We differentiate between `null` and `[]` here:
@@ -4386,6 +4735,73 @@ known type that the client can query even if new types of errors that implement
 type UserFacingError implements Response {
   error: UserFacingErrorInterface!
   responseContext: ResponseContext!
+}
+
+"""
+A structured platform error. Internal causes are only exposed through info.debug in dogfood.
+"""
+type PlatformError implements UserFacingErrorInterface {
+  detail: String
+  info: PlatformErrorInfo!
+  message: String!
+}
+
+"""
+Machine-readable platform error information shared by server- and client-sourced errors.
+Debug information is only exposed in dogfood environments.
+"""
+type PlatformErrorInfo {
+  code: PlatformErrorCode!
+  debug: String
+  detail: String
+  errorMessage: String!
+  httpStatus: Int!
+  isUserError: Boolean!
+  metadata: [PlatformErrorMetadata!]!
+  metricsCategory: String!
+  retryable: Boolean!
+  traceId: String
+  userFacingMessages: [PlatformErrorMessage!]!
+}
+
+input PlatformErrorInput {
+  code: PlatformErrorCode!
+  debug: String
+  detail: String
+  errorMessage: String
+  httpStatus: Int
+  isUserError: Boolean
+  metadata: [PlatformErrorMetadataInput!]!
+  metricsCategory: String
+  retryable: Boolean!
+  traceId: String
+  userFacingMessages: [PlatformErrorMessageInput!]
+}
+
+type PlatformErrorMessage {
+  format: PlatformErrorMessageFormat!
+  message: String!
+}
+
+enum PlatformErrorMessageFormat {
+  MARKDOWN
+  PLAIN_TEXT
+  SLACK_MRKDWN
+}
+
+input PlatformErrorMessageInput {
+  format: PlatformErrorMessageFormat!
+  message: String!
+}
+
+type PlatformErrorMetadata {
+  key: String!
+  value: String!
+}
+
+input PlatformErrorMetadataInput {
+  key: String!
+  value: String!
 }
 
 """
@@ -4541,18 +4957,12 @@ type Workspace {
   hasBillingHistory is the equivalent of the v1 hasBillingHistory field in the Team type.
   """
   hasBillingHistory: Boolean!
-
-  """
-  inviteCode is equivalent to inviteCode field in the v1 Team type. Unlike v1, inviteCode
-  is a string instead of a nested object since the only value actually used by the client
-  is the code itself.
-  """
-  inviteCode: String
   inviteLinkDomainRestrictions: [InviteLinkDomainRestriction!]!
   isEligibleForDiscovery: Boolean!
   memberSpendLimits: [MemberSpendLimit!]
   members: [WorkspaceMember!]!
   name: String!
+  openTeams: [DiscoverableTeamData!]!
   pendingEmailInvites: [EmailInvite!]!
 
   """
@@ -4568,6 +4978,12 @@ type Workspace {
 
 type WorkspaceMember {
   email: String!
+
+  """
+  Whether the member's Warp account has been disabled. A disabled member keeps
+  their workspace membership but cannot sign in or use Warp.
+  """
+  isDisabled: Boolean!
   role: MembershipRole!
   uid: ID!
   usageInfo: WorkspaceMemberUsageInfo!

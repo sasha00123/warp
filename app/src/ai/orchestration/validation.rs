@@ -6,12 +6,10 @@ use warpui::AppContext;
 
 use super::config_state::{AuthSecretSelection, OrchestrationConfigState};
 use crate::ai::auth_secret_types::auth_secret_types_for_harness;
-use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
 use crate::ai::local_harness_setup::{
-    local_harness_is_product_enabled, local_harness_setup_state, LocalHarnessSetupState,
+    LocalHarnessSetupState, local_harness_is_product_enabled, local_harness_setup_state,
 };
 use crate::ai::orchestration::providers::ORCHESTRATION_WARP_WORKER_HOST;
-use crate::cloud_object::CloudObjectLookup as _;
 
 /// Whether a harness's local setup allows selecting it: always true for
 /// Cloud, otherwise requires the local CLI to be installed and the
@@ -86,17 +84,17 @@ pub fn accept_disabled_reason_with_auth(
     if let Some(reason) = state.accept_disabled_reason() {
         return Some(reason.to_string());
     }
-    if matches!(state.execution_mode, RunAgentsExecutionMode::Local) {
-        if let Some(harness) = Harness::parse_local_child_harness(&state.harness_type) {
-            match local_harness_setup_state(harness) {
-                LocalHarnessSetupState::MissingHarness { tooltip } => {
-                    return Some(tooltip.to_string());
-                }
-                LocalHarnessSetupState::ProductDisabled { message } => {
-                    return Some(message.to_string());
-                }
-                LocalHarnessSetupState::Ready => {}
+    if matches!(state.execution_mode, RunAgentsExecutionMode::Local)
+        && let Some(harness) = Harness::parse_local_child_harness(&state.harness_type)
+    {
+        match local_harness_setup_state(harness) {
+            LocalHarnessSetupState::MissingHarness { tooltip } => {
+                return Some(tooltip.to_string());
             }
+            LocalHarnessSetupState::ProductDisabled { message } => {
+                return Some(message.to_string());
+            }
+            LocalHarnessSetupState::Ready => {}
         }
     }
     if auth_secret_selection_required(state, ctx) {
@@ -109,7 +107,7 @@ pub fn accept_disabled_reason_with_auth(
 /// environment selected. `None` when not applicable.
 pub fn empty_env_recommendation_message(
     execution_mode: &RunAgentsExecutionMode,
-    app: &AppContext,
+    has_visible_environment: bool,
 ) -> Option<String> {
     let RunAgentsExecutionMode::Remote {
         environment_id,
@@ -125,8 +123,7 @@ pub fn empty_env_recommendation_message(
     if !worker_host.eq_ignore_ascii_case(ORCHESTRATION_WARP_WORKER_HOST) {
         return None;
     }
-    let env_count = CloudAmbientAgentEnvironment::get_all(app).len();
-    Some(if env_count > 0 {
+    Some(if has_visible_environment {
         "We recommend selecting an environment for cloud agents.".to_string()
     } else {
         "We recommend creating an environment for cloud agents.".to_string()

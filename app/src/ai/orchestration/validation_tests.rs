@@ -1,7 +1,7 @@
 use ai::agent::action::RunAgentsExecutionMode;
 use warpui::{App, AppContext, Entity};
 
-use super::accept_disabled_reason_with_auth;
+use super::{accept_disabled_reason_with_auth, empty_env_recommendation_message};
 use crate::ai::orchestration::config_state::{AuthSecretSelection, OrchestrationConfigState};
 
 /// Minimal entity used to borrow an `AppContext` inside `App::test`.
@@ -35,6 +35,7 @@ fn cloud() -> RunAgentsExecutionMode {
         environment_id: "env-1".to_string(),
         worker_host: "warp".to_string(),
         computer_use_enabled: false,
+        runner_id: String::new(),
     }
 }
 
@@ -46,6 +47,25 @@ fn accept_allowed_for_oz_local_and_cloud() {
             assert_eq!(accept_disabled_reason_with_auth(&state, ctx), None);
         }
     });
+}
+
+#[test]
+fn empty_environment_recommendation_uses_visible_environment_availability() {
+    let mode = RunAgentsExecutionMode::Remote {
+        environment_id: String::new(),
+        worker_host: "warp".to_string(),
+        computer_use_enabled: false,
+        runner_id: String::new(),
+    };
+
+    assert_eq!(
+        empty_env_recommendation_message(&mode, true).as_deref(),
+        Some("We recommend selecting an environment for cloud agents.")
+    );
+    assert_eq!(
+        empty_env_recommendation_message(&mode, false).as_deref(),
+        Some("We recommend creating an environment for cloud agents.")
+    );
 }
 
 #[test]

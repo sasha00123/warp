@@ -6,8 +6,9 @@ use parking_lot::FairMutex;
 use serde::{Deserialize, Deserializer, Serialize};
 use warp_core::send_telemetry_from_ctx;
 use warp_errors::report_error;
-use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
+use warpui::{AppContext, Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
+use crate::BlocklistAIHistoryModel;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent::task::TaskId;
 use crate::ai::agent::{
@@ -21,10 +22,10 @@ use crate::ai::blocklist::{
     BlocklistAIActionEvent, BlocklistAIActionModel, BlocklistAIController, BlocklistAIHistoryEvent,
 };
 use crate::server::telemetry::{CLISubagentControlState, TelemetryEvent};
+use crate::terminal::TerminalModel;
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model_events::{ModelEvent, ModelEventDispatcher};
-use crate::terminal::TerminalModel;
-use crate::BlocklistAIHistoryModel;
+use crate::workspaces::user_workspaces::TeamContext;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum UserTakeOverReason {
@@ -356,6 +357,10 @@ impl CLISubagentController {
         }
     }
 
+    pub(crate) fn team_context<'a>(&self, app: &'a AppContext) -> TeamContext<'a> {
+        self.controller.as_ref(app).team_context(app)
+    }
+
     pub fn is_agent_in_control(&self) -> bool {
         let terminal_model = self.terminal_model.lock();
         terminal_model
@@ -488,16 +493,14 @@ impl CLISubagentController {
         // finishes or the user hands control back. We do NOT use ManuallyCancelled here
         // because that would mark the conversation (and ambient task) as cancelled,
         // which is incorrect since the conversation is still proceeding.
-        if should_cancel_conversation {
-            if let Some(conversation_id) = conversation_id {
-                self.controller.update(ctx, |controller, ctx| {
-                    controller.cancel_conversation_progress(
-                        conversation_id,
-                        CancellationReason::CLISubagentUserTakeover,
-                        ctx,
-                    );
-                });
-            }
+        if should_cancel_conversation && let Some(conversation_id) = conversation_id {
+            self.controller.update(ctx, |controller, ctx| {
+                controller.cancel_conversation_progress(
+                    conversation_id,
+                    CancellationReason::CLISubagentUserTakeover,
+                    ctx,
+                );
+            });
         }
 
         ctx.emit(CLISubagentEvent::UpdatedControl {
@@ -544,15 +547,17 @@ impl CLISubagentController {
         drop(terminal_model);
         if let Some(agent_view_controller) = &self.agent_view_controller {
             agent_view_controller.update(ctx, |controller, ctx| {
-                if !controller.is_inline() {
-                    if let Err(e) = controller.try_enter_inline_agent_view(
+                if !controller.is_inline()
+                    && let Err(e) = controller.try_enter_inline_agent_view(
                         conversation_id,
                         AgentViewEntryOrigin::LongRunningCommand,
                         ctx,
-                    ) {
-                        report_error!(anyhow::Error::new(e)
-                            .context("Failed to enter inline agent view for LRC handoff"));
-                    }
+                    )
+                {
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Failed to enter inline agent view for LRC handoff")
+                    );
                 }
             });
         }
@@ -572,13 +577,7 @@ impl CLISubagentController {
                         .collect()
                 };
                 self.controller.update(ctx, |controller, ctx| {
-                    controller.resume_conversation(
-                        conversation_id,
-                        /*can_attempt_resume_on_error*/ true,
-                        /*is_auto_resume_after_error*/ false,
-                        resume_context,
-                        ctx,
-                    );
+                    controller.resume_conversation(conversation_id, resume_context, ctx);
                 });
             }
         }
@@ -668,8 +667,10 @@ impl CLISubagentController {
                     task_id,
                     *conversation_id,
                 ) {
-                    report_error!(anyhow::Error::new(e)
-                        .context("Could not update interaction mode to agent-monitored"));
+                    report_error!(
+                        anyhow::Error::new(e)
+                            .context("Could not update interaction mode to agent-monitored")
+                    );
                     return;
                 };
 

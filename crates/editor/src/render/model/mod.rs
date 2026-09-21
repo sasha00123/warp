@@ -2,6 +2,7 @@ use core::slice;
 use std::any::Any;
 use std::cell::{Cell, Ref, RefCell};
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU8;
 use std::ops::{Add, AddAssign, Range, Sub, SubAssign};
 use std::sync::Arc;
 use std::{fmt, mem};
@@ -34,7 +35,7 @@ use warpui_core::fonts::{FamilyId, Properties, Weight};
 use warpui_core::geometry::rect::RectF;
 use warpui_core::geometry::vector::{Vector2F, vec2f};
 use warpui_core::platform::LineStyle;
-use warpui_core::text_layout::{CaretPosition, LayoutCache, Line, TextFrame};
+use warpui_core::text_layout::{CaretPosition, Line, TextFrame};
 use warpui_core::text_selection_utils::{
     NewlineTickParams, calculate_tick_width, create_newline_tick_rect,
     selection_crosses_newline_offset_based,
@@ -87,6 +88,7 @@ pub(crate) mod test_utils;
 /// scrolling can introduce a large amount of floating-point rounding error.
 pub const UNIT_MARGIN: (f32, i32) = (0.01, 2);
 const AUTO_SCROLL_MARGIN: f32 = 12.;
+const DEFAULT_CHAR_CELL_TAB_SIZE: NonZeroU8 = NonZeroU8::new(4).unwrap();
 
 /// The minimum height of a paragraph, not including padding or margins.
 pub const PARAGRAPH_MIN_HEIGHT: Pixels = Pixels::new(24.);
@@ -438,9 +440,10 @@ impl CharCellTemporaryBlock {
         insert_before: LineCount,
         line_decoration: Option<ColorU>,
         inline_decorations: Vec<(Range<usize>, ColorU)>,
+        text_index: &CharCellTextIndex,
     ) -> Self {
         let layout_content = content.strip_suffix('\n').unwrap_or(&content);
-        let char_widths = char_cell_display_widths(layout_content);
+        let char_widths = text_index.display_widths(layout_content);
         let line_breaks = char_cell_line_break_opportunities(layout_content);
         Self {
             content,
@@ -452,10 +455,8 @@ impl CharCellTemporaryBlock {
             wrapped_row_starts: RefCell::new(None),
         }
     }
-}
 
-impl From<TemporaryBlock> for CharCellTemporaryBlock {
-    fn from(block: TemporaryBlock) -> Self {
+    fn from_temporary_block(block: TemporaryBlock, text_index: &CharCellTextIndex) -> Self {
         let inline_decorations = block
             .inline_text_decorations
             .into_iter()
@@ -472,6 +473,7 @@ impl From<TemporaryBlock> for CharCellTemporaryBlock {
             block.insert_before,
             block.line_decoration.map(|fill| fill.into_solid()),
             inline_decorations,
+            text_index,
         )
     }
 }
@@ -493,6 +495,8 @@ pub(crate) struct CharCellTextIndex {
     line_visual_row_starts: Vec<usize>,
     /// Global buffer character offset of every visual row start.
     visual_row_char_starts: Vec<CharOffset>,
+    /// Distance between tab stops, structurally guaranteed to be nonzero.
+    tab_size: NonZeroU8,
 }
 
 impl Default for CharCellTextIndex {
@@ -503,7 +507,21 @@ impl Default for CharCellTextIndex {
 
 impl CharCellTextIndex {
     fn new(terminal_width: u16) -> Self {
+        Self::new_with_tab_size(terminal_width, DEFAULT_CHAR_CELL_TAB_SIZE)
+    }
+
+    fn new_with_styles(terminal_width: u16, styles: &RichTextStyles) -> Self {
+        let tab_size = styles
+            .base_text
+            .fixed_width_tab_size
+            .and_then(NonZeroU8::new)
+            .unwrap_or(DEFAULT_CHAR_CELL_TAB_SIZE);
+        Self::new_with_tab_size(terminal_width, tab_size)
+    }
+
+    fn new_with_tab_size(terminal_width: u16, tab_size: NonZeroU8) -> Self {
         let mut index = Self {
+            tab_size,
             line_starts: vec![CharOffset::zero()],
             char_widths: Vec::new(),
             line_breaks: vec![true],
@@ -512,6 +530,41 @@ impl CharCellTextIndex {
         };
         index.rebuild_wrap_cache(terminal_width);
         index
+    }
+
+    fn display_widths(&self, text: &str) -> Vec<u8> {
+        let mut widths = Vec::with_capacity(text.len());
+        Self::append_display_widths(self.tab_size, text, &mut widths, |_, _| {});
+        widths
+    }
+
+    fn append_display_widths(
+        tab_size: NonZeroU8,
+        text: &str,
+        widths: &mut Vec<u8>,
+        mut visit: impl FnMut(char, usize),
+    ) {
+        let tab_size = usize::from(tab_size.get());
+        let mut col: usize = 0;
+        for grapheme in text.graphemes(true) {
+            let width = if grapheme == "\t" {
+                let spaces = tab_size - (col % tab_size);
+                spaces.min(usize::from(u8::MAX)) as u8
+            } else {
+                grapheme.width().min(usize::from(u8::MAX)) as u8
+            };
+
+            let is_newline = grapheme == "\n";
+            for (index, ch) in grapheme.chars().enumerate() {
+                widths.push(if index == 0 { width } else { 0 });
+                visit(ch, widths.len());
+            }
+            if is_newline {
+                col = 0;
+            } else {
+                col += width as usize;
+            }
+        }
     }
 
     fn rebuild(&mut self, text: &str, terminal_width: u16) {
@@ -526,11 +579,16 @@ impl CharCellTextIndex {
         self.line_breaks.clear();
         self.line_starts.push(CharOffset::zero());
         let line_starts = &mut self.line_starts;
-        append_char_cell_display_widths(text, &mut self.char_widths, |ch, next_offset| {
-            if ch == '\n' {
-                line_starts.push(CharOffset::from(next_offset));
-            }
-        });
+        Self::append_display_widths(
+            self.tab_size,
+            text,
+            &mut self.char_widths,
+            |ch, next_offset| {
+                if ch == '\n' {
+                    line_starts.push(CharOffset::from(next_offset));
+                }
+            },
+        );
         self.line_breaks
             .extend(char_cell_line_break_opportunities(text));
     }
@@ -663,7 +721,7 @@ pub struct CharCellState {
 }
 
 impl CharCellState {
-    fn new(terminal_width: u16, hidden_lines: Option<ModelHandle<HiddenLinesModel>>) -> Self {
+    pub fn new(terminal_width: u16, hidden_lines: Option<ModelHandle<HiddenLinesModel>>) -> Self {
         Self {
             terminal_width: Cell::new(terminal_width),
             text_index: RefCell::new(CharCellTextIndex::new(terminal_width)),
@@ -673,9 +731,14 @@ impl CharCellState {
         }
     }
 
-    #[cfg(any(test, feature = "test-util"))]
-    pub fn new_for_test(terminal_width: u16) -> Self {
-        Self::new(terminal_width, None)
+    fn new_with_styles(
+        terminal_width: u16,
+        styles: &RichTextStyles,
+        hidden_lines: Option<ModelHandle<HiddenLinesModel>>,
+    ) -> Self {
+        let mut state = Self::new(terminal_width, hidden_lines);
+        *state.text_index.get_mut() = CharCellTextIndex::new_with_styles(terminal_width, styles);
+        state
     }
 
     /// Replace the stored ghost lines. Replace-all semantics, mirroring the
@@ -764,7 +827,8 @@ impl CharCellState {
 
     #[cfg(any(test, feature = "test-util"))]
     pub fn set_test_temporary_blocks(&self, blocks: Vec<(String, usize)>) {
-        self.set_temporary_blocks(
+        let blocks = {
+            let text_index = self.text_index.borrow();
             blocks
                 .into_iter()
                 .map(|(content, insert_before)| {
@@ -773,10 +837,12 @@ impl CharCellState {
                         LineCount::from(insert_before),
                         None,
                         Vec::new(),
+                        &text_index,
                     )
                 })
-                .collect(),
-        );
+                .collect()
+        };
+        self.set_temporary_blocks(blocks);
     }
 
     #[cfg(any(test, feature = "test-util"))]
@@ -859,6 +925,18 @@ impl CharCellState {
         self.scroll_offset.get()
     }
 
+    /// Clamps the retained viewport offset to the current display-row count.
+    pub fn clamp_scroll_offset(
+        &self,
+        cursor_char_offset: CharOffset,
+        viewport_rows: u32,
+        hidden_line_ranges: &[Range<usize>],
+    ) {
+        let (_, total_rows) = self.display_geometry(cursor_char_offset, hidden_line_ranges);
+        let (offset, _) = self.clamped_scroll_window(total_rows, viewport_rows);
+        self.scroll_offset.set(offset);
+    }
+
     /// Scrolls the viewport by `rows` display rows (negative scrolls toward
     /// the top), clamped to `[0, total_rows - visible_rows]`. Independent of
     /// the cursor: wheel scrolling must not snap the viewport back to it.
@@ -892,14 +970,7 @@ impl CharCellState {
     ) {
         let (cursor_row, total_rows) =
             self.display_geometry(cursor_char_offset, hidden_line_ranges);
-        let visible_rows = total_rows.min(viewport_rows).max(1);
-        // A stale offset can point past the last remaining row (e.g. after a
-        // deletion shrank the content); clamp it so the visible window always
-        // overlaps real rows before following the cursor.
-        let mut offset = self
-            .scroll_offset
-            .get()
-            .min(total_rows.saturating_sub(visible_rows));
+        let (mut offset, visible_rows) = self.clamped_scroll_window(total_rows, viewport_rows);
         let Some(cursor_row) = cursor_row else {
             self.scroll_offset.set(offset);
             return;
@@ -910,6 +981,16 @@ impl CharCellState {
             offset = cursor_row.saturating_sub(visible_rows - 1);
         }
         self.scroll_offset.set(offset);
+    }
+
+    /// Returns the clamped first row and visible-row count for a viewport.
+    fn clamped_scroll_window(&self, total_rows: u32, viewport_rows: u32) -> (u32, u32) {
+        let visible_rows = total_rows.min(viewport_rows).max(1);
+        let offset = self
+            .scroll_offset
+            .get()
+            .min(total_rows.saturating_sub(visible_rows));
+        (offset, visible_rows)
     }
 
     /// The cursor's display row and the total display-row count — including
@@ -1034,6 +1115,10 @@ pub struct RenderState {
 
     pending_edits: Mutex<Vec<PendingLayout>>,
     pending_selection_change: Mutex<Option<PendingSelectionUpdate>>,
+    /// A scroll fraction awaiting layout. The content height isn't known until element layout
+    /// completes, so the fraction is applied only once content at or past its `minimum_version`
+    /// has been laid out — mirroring the code editor's `ScrollTrigger`.
+    pending_scroll_fraction: Option<PendingScrollFraction>,
     layout_options: RenderLayoutOptions,
 
     /// Optional path to the document being rendered, used for resolving relative paths
@@ -1335,7 +1420,7 @@ impl ColumnUnit {
 }
 
 /// A character offset within a [`TextFrame`]. These offsets count characters in the Rust string
-/// passed to [`warpui_core::text_layout::LayoutCache::layout_text()`].
+/// passed to the text layout system.
 ///
 /// Frame offsets often, but not always, correspond to glyph indices and caret positions. However,
 /// they do not line up 1:1 if a glyph or grapheme contains multiple characters
@@ -2408,14 +2493,16 @@ impl RenderState {
     /// Required (unlike [`Self::new`]'s optional handle): every char-cell editor is
     /// built through `CodeEditorModel::new_tui`, which always has one.
     ///
-    /// `styles` is stored on the struct for API compatibility but is **not used** for rendering
-    /// in CharCell mode. Callers (e.g. `warp_tui`) should supply a minimal stub.
+    /// CharCell mode consumes `styles.base_text.fixed_width_tab_size` for tab
+    /// geometry. Other style fields are retained for API compatibility but are
+    /// unused; callers (e.g. `warp_tui`) may supply a minimal stub.
     pub fn new_tui(
         terminal_width: u16,
         styles: RichTextStyles,
         hidden_lines: ModelHandle<HiddenLinesModel>,
         ctx: &mut ModelContext<Self>,
     ) -> Self {
+        let char_cell = CharCellState::new_with_styles(terminal_width, &styles, Some(hidden_lines));
         let (element_tx, element_rx) = async_channel::unbounded();
         ctx.spawn_stream_local(element_rx, Self::apply_element_update, |_, _| {});
 
@@ -2446,11 +2533,9 @@ impl RenderState {
             pending_selection_change: Mutex::new(None),
             layout_options: Default::default(),
             document_path: None,
+            pending_scroll_fraction: None,
             hidden_lines: None,
-            layout_mode: LayoutMode::CharCell(CharCellState::new(
-                terminal_width,
-                Some(hidden_lines),
-            )),
+            layout_mode: LayoutMode::CharCell(char_cell),
         }
     }
 
@@ -2510,6 +2595,7 @@ impl RenderState {
             #[cfg(any(test, feature = "test-util"))]
             outstanding_layouts: Default::default(),
             pending_selection_change: Mutex::new(None),
+            pending_scroll_fraction: None,
             layout_options: Default::default(),
             document_path: None,
             hidden_lines,
@@ -2957,6 +3043,30 @@ impl RenderState {
         ScrollPositionSnapshot::from_scroll_top(self)
     }
 
+    /// The current vertical scroll position as a fraction of the scrollable range, in `0..=1`.
+    ///
+    /// Unlike [`Self::snapshot_scroll_position`], this is document-independent, so it can be used
+    /// to preserve scroll position across a document swap (e.g. toggling markdown between raw and
+    /// rendered), where a char-offset snapshot cannot map between the two different documents.
+    pub fn scroll_fraction(&self) -> f32 {
+        self.viewport.scroll_fraction(self.height())
+    }
+
+    /// Scroll to the given `fraction` (clamped to `0..=1`) of the scrollable range, applied after
+    /// content at or past `minimum_version` has been laid out so the content height is known.
+    ///
+    /// `minimum_version` must be captured by the caller at submit time (typically the content
+    /// buffer's version right after the edit that produced the content to scroll). It cannot be
+    /// captured when the action is dequeued: the edit's `BufferEdit` may reach the layout channel
+    /// via a deferred subscription and arrive *after* this action, so the render model's own
+    /// version bookkeeping isn't reliable at dequeue time.
+    pub fn scroll_to_fraction(&mut self, fraction: f32, minimum_version: BufferVersion) {
+        self.submit_layout_action(LayoutAction::ScrollToFraction {
+            fraction,
+            minimum_version,
+        })
+    }
+
     pub fn scroll_data_horizontal(&self) -> ScrollData {
         let mut visible_px = self.viewport.width();
         let total_size = self.width();
@@ -3150,6 +3260,25 @@ impl RenderState {
                     ctx.notify();
                 }
             }
+            LayoutAction::ScrollToFraction {
+                fraction,
+                minimum_version,
+            } => {
+                // Always defer to `apply_element_update`, which runs after the element has been
+                // laid out — applying here would read a stale (often ~0) content height on an
+                // editor that has never rendered (a fresh pane has no viewport size yet) and clamp
+                // to the top. `minimum_version` comes from the submit site rather than the render
+                // model's own bookkeeping, because the edit that produced the content may reach the
+                // layout channel *after* this action. This mirrors the code editor's `ScrollTrigger`.
+                self.pending_scroll_fraction = Some(PendingScrollFraction {
+                    fraction,
+                    minimum_version,
+                });
+                // Trigger a re-render so a subsequent element layout applies the pending
+                // fraction even when the content is already quiescent — without this the
+                // restore would wait for an unrelated re-render.
+                ctx.notify();
+            }
             LayoutAction::LayoutTemporaryBlock(blocks) => {
                 // Temporary blocks are interleaved deleted/replaced lines in diff
                 // views (only created by `CodeEditorModel::refresh_diff_state`).
@@ -3160,12 +3289,16 @@ impl RenderState {
                 // No early return: the outstanding-layouts bookkeeping below the
                 // match must run for every action.
                 if let LayoutMode::CharCell(char_cell) = &self.layout_mode {
-                    char_cell.set_temporary_blocks(
+                    let blocks = {
+                        let text_index = char_cell.text_index.borrow();
                         blocks
                             .into_iter()
-                            .map(CharCellTemporaryBlock::from)
-                            .collect(),
-                    );
+                            .map(|block| {
+                                CharCellTemporaryBlock::from_temporary_block(block, &text_index)
+                            })
+                            .collect()
+                    };
+                    char_cell.set_temporary_blocks(blocks);
                 } else if self.lazy_layout {
                     // If we are performing layout lazily, push the temporary
                     // blocks to the pending edits queue which is flushed at
@@ -3241,8 +3374,7 @@ impl RenderState {
     }
 
     fn layout_temporary_blocks(&self, blocks: Vec<TemporaryBlock>, app: &AppContext) {
-        let layout_cache = LayoutCache::new();
-        let layout_context = self.layout_context(&layout_cache, app);
+        let layout_context = self.layout_context(app);
         let laid_out_blocks = layout_temporary_blocks(blocks, &layout_context);
         self.reset_temporary_block(laid_out_blocks);
     }
@@ -3253,8 +3385,7 @@ impl RenderState {
         hidden_ranges: Option<RangeSet<CharOffset>>,
         app: &AppContext,
     ) {
-        let layout_cache = LayoutCache::new();
-        let layout_context = self.layout_context(&layout_cache, app);
+        let layout_context = self.layout_context(app);
         let laid_out_edit = delta.layout_delta(
             &layout_context,
             self.document_path.as_deref(),
@@ -3265,15 +3396,8 @@ impl RenderState {
         self.layout_pending_edit(laid_out_edit, hidden_ranges);
     }
 
-    /// Construct a throwaway layout cache. We only lay out modified text, so in effect,
-    /// the entire RenderState is a cache.
-    fn layout_context<'a>(
-        &'a self,
-        layout_cache: &'a LayoutCache,
-        ctx: &'a AppContext,
-    ) -> TextLayout<'a> {
+    fn layout_context<'a>(&'a self, ctx: &'a AppContext) -> TextLayout<'a> {
         TextLayout::new(
-            layout_cache,
             ctx.font_cache().text_layout_system(),
             &self.styles,
             match self.width_setting {
@@ -3329,6 +3453,30 @@ impl RenderState {
                 // Don't emit this event when the channel has more current updates
                 // to process. This is to avoid emitting events when the viewport info is stale.
                 ctx.emit(RenderEvent::ViewportUpdated(update.buffer_version));
+            }
+        }
+
+        // Apply a deferred scroll fraction now that content has been laid out and both the content
+        // height and viewport size are current. Gated on the laid-out version so we don't apply
+        // against content that predates the reset that requested the scroll.
+        if let Some(pending) = self.pending_scroll_fraction.take() {
+            // A zero-height viewport means the element has never been laid out, so the content
+            // height is meaningless regardless of buffer versions. An update without a laid-out
+            // version (or one older than the reset) hasn't rendered the target content yet, so we
+            // retain the pending fraction rather than apply it against stale content.
+            let version_ready = self.viewport.height() > Pixels::zero()
+                && update
+                    .buffer_version
+                    .is_some_and(|laid_out| laid_out >= pending.minimum_version);
+            if version_ready {
+                if self
+                    .viewport
+                    .scroll_to_fraction(pending.fraction, self.height())
+                {
+                    ctx.notify();
+                }
+            } else {
+                self.pending_scroll_fraction = Some(pending);
             }
         }
     }
@@ -4124,6 +4272,13 @@ struct PendingSelectionUpdate {
     buffer_version: BufferVersion,
 }
 
+/// A scroll fraction deferred until the content it targets has been laid out.
+struct PendingScrollFraction {
+    fraction: f32,
+    /// Apply only once content at or past this version has been laid out.
+    minimum_version: BufferVersion,
+}
+
 /// A change to the rendering state that's processed by the background layout task.
 #[derive(Debug, Clone)]
 enum LayoutAction {
@@ -4146,6 +4301,12 @@ enum LayoutAction {
     },
     /// Scroll to a snapshotted scroll position.
     ScrollTo(ScrollPositionSnapshot),
+    /// Scroll to a fraction of the scrollable range, in `0..=1`, once content at or past
+    /// `minimum_version` has been laid out.
+    ScrollToFraction {
+        fraction: f32,
+        minimum_version: BufferVersion,
+    },
 }
 
 impl From<Pixels> for Height {
@@ -5636,30 +5797,6 @@ impl LaidOutEmbeddedItem for BrokenBlockEmbedding {
 // ──────────────────────────────────────────────────────────────────────────────
 // Char-cell (TUI) layout helpers
 // ──────────────────────────────────────────────────────────────────────────────
-
-/// Appends one width per character and reports each character's following
-/// offset without allocating intermediate metadata.
-fn append_char_cell_display_widths(
-    text: &str,
-    widths: &mut Vec<u8>,
-    mut visit: impl FnMut(char, usize),
-) {
-    for grapheme in text.graphemes(true) {
-        let width = grapheme.width().min(usize::from(u8::MAX)) as u8;
-        for (index, ch) in grapheme.chars().enumerate() {
-            widths.push(if index == 0 { width } else { 0 });
-            visit(ch, widths.len());
-        }
-    }
-}
-
-/// Returns one width entry per character, charging each grapheme's width to
-/// its first character and zero to the remaining characters.
-fn char_cell_display_widths(text: &str) -> Vec<u8> {
-    let mut widths = Vec::with_capacity(text.len());
-    append_char_cell_display_widths(text, &mut widths, |_, _| {});
-    widths
-}
 
 /// Returns Unicode line-break opportunities as 0-based character gaps.
 ///

@@ -361,7 +361,7 @@ fn test_empty_task_handling() {
 
 #[test]
 fn test_from_tasks() {
-    use std::collections::HashMap;
+    use hashbrown::HashMap;
 
     let task = create_test_task_with_exchanges(3);
     let task_id = task.id().clone();
@@ -881,9 +881,11 @@ fn test_exchange_by_id_resolves_unlinked_subtask_exchange() {
     store.insert(subtask);
 
     // The subtask's exchanges are (intentionally) not in the linearized index...
-    assert!(!store
-        .all_exchanges()
-        .any(|e| e.id == subtask_exchange_ids[0]));
+    assert!(
+        !store
+            .all_exchanges()
+            .any(|e| e.id == subtask_exchange_ids[0])
+    );
     // ...but are still resolvable by id via the all-tasks fallback.
     for id in &subtask_exchange_ids {
         assert_eq!(store.exchange_by_id(*id).map(|e| e.id), Some(*id));

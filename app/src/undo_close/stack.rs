@@ -6,14 +6,15 @@ use warpui::{
     ViewHandle, WeakViewHandle, WindowId,
 };
 
-use super::settings::UndoCloseSettingsChangedEvent;
 use super::UndoCloseSettings;
+use super::settings::UndoCloseSettingsChangedEvent;
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::send_telemetry_from_app_ctx;
 use crate::server::telemetry::{TelemetryEvent, UndoCloseItemType};
 use crate::tab::TabData;
+use crate::window_settings::WindowSettings;
 use crate::workspace::Workspace;
 
 /// A unique identifier for an item in the undo close stack.
@@ -261,7 +262,14 @@ impl UndoCloseStack {
                 );
 
                 let window_id = data.window_id;
-                ctx.reopen_closed_window(*data);
+                let (background_blur_radius_pixels, background_backdrop) = {
+                    let window_settings = WindowSettings::as_ref(ctx);
+                    (
+                        Some(*window_settings.background_blur_radius),
+                        *window_settings.background_backdrop,
+                    )
+                };
+                ctx.reopen_closed_window(*data, background_blur_radius_pixels, background_backdrop);
 
                 if let Some(workspace) = window_workspace(window_id, ctx) {
                     workspace.update(ctx, |workspace, ctx| {

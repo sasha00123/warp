@@ -5,9 +5,9 @@ use warp_multi_agent_api as api;
 use warp_terminal::model::BlockIndex;
 
 use super::find_block_indices_for_exchange_timestamps;
+use crate::AIConversationId;
 use crate::ai::agent::conversation::AIConversation;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
-use crate::AIConversationId;
 
 /// Helper: create a `DateTime<Local>` from a unix timestamp in seconds.
 fn ts(secs: i64) -> chrono::DateTime<Local> {
@@ -248,6 +248,9 @@ fn user_query_with_pwd(id: &str, request_id: &str, query: &str, pwd: &str) -> ap
             referenced_attachments: HashMap::new(),
             mode: None,
             intended_agent: Default::default(),
+            origin: None,
+            author: None,
+            source_message: None,
         })),
         request_id: request_id.to_string(),
         timestamp: None,

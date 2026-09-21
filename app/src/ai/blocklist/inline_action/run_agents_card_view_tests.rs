@@ -31,6 +31,8 @@ fn make_request_with_skills(
             name: "child".to_string(),
             prompt: "do work".to_string(),
             title: "Child agent".to_string(),
+            agent_identity_uid: String::new(),
+            model_id: String::new(),
         }],
         plan_id: String::new(),
         harness_auth_secret_name: None,
@@ -74,6 +76,7 @@ fn local_to_cloud_initializes_remote_with_empty_environment() {
         environment_id,
         worker_host,
         computer_use_enabled,
+        ..
     } = state.orchestration_config_state.execution_mode
     else {
         panic!("expected Remote after toggle");
@@ -91,6 +94,7 @@ fn cloud_to_local_drops_environment() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     ));
     state
@@ -120,6 +124,7 @@ fn cloud_without_env_no_longer_disables_accept() {
             environment_id: String::new(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     ));
     assert!(
@@ -140,6 +145,7 @@ fn cloud_with_opencode_disables_accept() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     ));
     let reason = state.orchestration_config_state.accept_disabled_reason();
@@ -178,10 +184,12 @@ fn from_request_sanitizes_disabled_local_harness_to_oz() {
 
     assert_eq!(state.orchestration_config_state.harness_type, "oz");
     assert_eq!(state.orchestration_config_state.model_id, "");
-    assert!(state
-        .orchestration_config_state
-        .accept_disabled_reason()
-        .is_none());
+    assert!(
+        state
+            .orchestration_config_state
+            .accept_disabled_reason()
+            .is_none()
+    );
 }
 
 #[test]
@@ -193,6 +201,7 @@ fn cloud_with_env_and_non_opencode_harness_allows_accept() {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
                 computer_use_enabled: false,
+                runner_id: String::new(),
             },
         ));
         assert!(
@@ -226,6 +235,7 @@ fn set_environment_id_updates_remote() {
             environment_id: "old".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: false,
+            runner_id: String::new(),
         },
     ));
     state
@@ -240,6 +250,51 @@ fn set_environment_id_updates_remote() {
 }
 
 #[test]
+fn set_runner_id_updates_remote_and_round_trips() {
+    let mut state = RunAgentsEditState::from_request(&make_request(
+        "oz",
+        RunAgentsExecutionMode::Remote {
+            environment_id: "env-1".to_string(),
+            worker_host: "warp".to_string(),
+            computer_use_enabled: false,
+            runner_id: String::new(),
+        },
+    ));
+    state
+        .orchestration_config_state
+        .set_runner_id("runner-9".to_string());
+    let RunAgentsExecutionMode::Remote { runner_id, .. } =
+        &state.orchestration_config_state.execution_mode
+    else {
+        panic!("expected Remote");
+    };
+    assert_eq!(runner_id, "runner-9");
+    // The runner flows back out through to_request unchanged.
+    assert_eq!(
+        state.to_request().execution_mode,
+        RunAgentsExecutionMode::Remote {
+            environment_id: "env-1".to_string(),
+            worker_host: "warp".to_string(),
+            computer_use_enabled: false,
+            runner_id: "runner-9".to_string(),
+        }
+    );
+}
+
+#[test]
+fn set_runner_id_no_op_in_local_mode() {
+    let mut state =
+        RunAgentsEditState::from_request(&make_request("oz", RunAgentsExecutionMode::Local));
+    state
+        .orchestration_config_state
+        .set_runner_id("runner-1".to_string());
+    assert!(matches!(
+        state.orchestration_config_state.execution_mode,
+        RunAgentsExecutionMode::Local
+    ));
+}
+
+#[test]
 fn to_request_round_trips_request_fields() {
     let mut req = make_request_with_skills(
         "claude",
@@ -247,6 +302,7 @@ fn to_request_round_trips_request_fields() {
             environment_id: "env-2".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: true,
+            runner_id: String::new(),
         },
         vec![
             SkillReference::BundledSkillId("writing-pr-descriptions".to_string()),
@@ -269,12 +325,13 @@ fn to_request_round_trips_request_fields() {
 }
 
 mod format_terminal_state_tests {
-    use super::super::{format_terminal_state, StatusKind};
+    use super::super::{StatusKind, format_terminal_state};
     use super::*;
 
     fn launched(name: &str, agent_id: &str) -> RunAgentsAgentOutcome {
         RunAgentsAgentOutcome {
             name: name.to_string(),
+            resolved_model_id: String::new(),
             kind: RunAgentsAgentOutcomeKind::Launched {
                 agent_id: agent_id.to_string(),
             },
@@ -284,6 +341,7 @@ mod format_terminal_state_tests {
     fn failed(name: &str, error: &str) -> RunAgentsAgentOutcome {
         RunAgentsAgentOutcome {
             name: name.to_string(),
+            resolved_model_id: String::new(),
             kind: RunAgentsAgentOutcomeKind::Failed {
                 error: error.to_string(),
             },
@@ -419,6 +477,7 @@ mod override_from_approved_config_tests {
             execution_mode: OrchestrationExecutionMode::Remote {
                 environment_id: env.to_string(),
                 worker_host: "warp".to_string(),
+                runner_id: String::new(),
             },
         }
     }
@@ -477,6 +536,7 @@ mod override_from_approved_config_tests {
                 environment_id: "env-1".to_string(),
                 worker_host: "warp".to_string(),
                 computer_use_enabled: true,
+                runner_id: String::new(),
             },
         ));
         state
@@ -499,6 +559,7 @@ mod override_from_approved_config_tests {
                 environment_id: "old-env".to_string(),
                 worker_host: "warp".to_string(),
                 computer_use_enabled: true,
+                runner_id: String::new(),
             },
         ));
         state
@@ -561,6 +622,7 @@ fn local_to_cloud_idempotent_when_already_remote() {
             environment_id: "env-1".to_string(),
             worker_host: "warp".to_string(),
             computer_use_enabled: true,
+            runner_id: String::new(),
         },
     ));
     state
@@ -582,4 +644,71 @@ fn local_to_cloud_idempotent_when_already_remote() {
         computer_use_enabled,
         "toggle to Remote when already Remote should not clobber computer_use"
     );
+}
+
+mod is_orphaned_by_finished_output_tests {
+    use super::super::is_orphaned_by_finished_output;
+    use crate::ai::agent::{AIAgentOutput, CancellationReason, RenderableAIError, Shared};
+    use crate::ai::blocklist::action_model::AIActionStatus;
+    use crate::ai::blocklist::block::model::AIBlockOutputStatus;
+
+    fn partial_output() -> Shared<AIAgentOutput> {
+        Shared::new(AIAgentOutput::default())
+    }
+
+    fn cancelled_block() -> AIBlockOutputStatus {
+        AIBlockOutputStatus::Cancelled {
+            partial_output: Some(partial_output()),
+            reason: CancellationReason::ManuallyCancelled,
+        }
+    }
+
+    #[test]
+    fn statusless_action_on_cancelled_block_is_orphaned() {
+        assert!(is_orphaned_by_finished_output(None, &cancelled_block()));
+    }
+
+    #[test]
+    fn statusless_action_on_failed_block_is_orphaned() {
+        let failed = AIBlockOutputStatus::Failed {
+            partial_output: Some(partial_output()),
+            error: RenderableAIError::other("boom", false),
+        };
+        assert!(is_orphaned_by_finished_output(None, &failed));
+    }
+
+    #[test]
+    fn statusless_action_on_unfinished_or_successful_block_is_not_orphaned() {
+        for block_status in [
+            AIBlockOutputStatus::Pending,
+            AIBlockOutputStatus::PartiallyReceived {
+                output: partial_output(),
+            },
+            AIBlockOutputStatus::Complete {
+                output: partial_output(),
+            },
+        ] {
+            assert!(
+                !is_orphaned_by_finished_output(None, &block_status),
+                "{block_status:?} should not orphan the card"
+            );
+        }
+    }
+
+    /// An action that reached the queue gets a real result when the
+    /// conversation is cancelled, so its own status must keep driving the card.
+    #[test]
+    fn action_with_status_on_cancelled_block_is_not_orphaned() {
+        for action_status in [
+            AIActionStatus::Preprocessing,
+            AIActionStatus::Queued,
+            AIActionStatus::Blocked,
+            AIActionStatus::RunningAsync,
+        ] {
+            assert!(
+                !is_orphaned_by_finished_output(Some(&action_status), &cancelled_block()),
+                "{action_status:?} should not orphan the card"
+            );
+        }
+    }
 }

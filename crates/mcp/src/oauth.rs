@@ -150,11 +150,10 @@ impl PersistingCredentialStore {
             .and_then(|opt| opt)
             .and_then(|prev| prev.token_response)
             .and_then(|prev_tr| prev_tr.refresh_token().cloned())
+            && let Some(tr) = credentials.token_response.as_mut()
         {
-            if let Some(tr) = credentials.token_response.as_mut() {
-                // Carry forward the existing/previous refresh token, constructing new if needed
-                tr.set_refresh_token(Some(RefreshToken::new(prev_rt.secret().to_string())));
-            }
+            // Carry forward the existing/previous refresh token, constructing new if needed
+            tr.set_refresh_token(Some(RefreshToken::new(prev_rt.secret().to_string())));
         }
     }
 }
@@ -322,9 +321,16 @@ pub async fn make_authenticated_client(
                  in the Warp desktop app first."
             );
         }
+        // Naming the alternatives matters more than it looks: a cloud agent
+        // often runs somewhere its operator cannot open a browser against, so
+        // "authenticate in the desktop app" is not always a remedy they can
+        // act on.
         return Err(AuthError::AuthorizationFailed(
-            "MCP server requires OAuth authentication. Please authenticate this server in the \
-             Warp desktop app first, then try again."
+            "This MCP server asked for interactive OAuth, which cannot run in a headless or \
+             cloud agent. Either attach the server as a Warp-managed MCP so the platform \
+             supplies its credentials, or configure a static credential header backed by a \
+             managed secret. Authenticating the server in the Warp desktop app also works for \
+             runs on that same machine."
                 .to_string(),
         ));
     }
@@ -453,13 +459,17 @@ pub fn write_to_secure_storage<T: Serialize>(
     match serde_json::to_string(credentials) {
         Ok(json) => {
             if let Err(err) = app.secure_storage().write_value(key, &json) {
-                report_error!(anyhow::Error::new(err)
-                    .context("Failed to write MCP credentials to secure storage"));
+                report_error!(
+                    anyhow::Error::new(err)
+                        .context("Failed to write MCP credentials to secure storage")
+                );
             }
         }
         Err(err) => {
-            report_error!(anyhow::Error::new(err)
-                .context("Failed to serialize MCP credentials for secure storage"));
+            report_error!(
+                anyhow::Error::new(err)
+                    .context("Failed to serialize MCP credentials for secure storage")
+            );
         }
     }
 }

@@ -79,7 +79,7 @@ fn test_lazy_background_insertion() {
 fn test_background_triggers_wakeup() {
     let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
     let mut block_list = new_block_list(
-        ChannelEventListener::builder_for_test()
+        ChannelEventListener::builder_for_test::<crate::terminal::event::Event>()
             .with_wakeups_tx(wakeups_tx)
             .build(),
         TypeaheadMode::ShellReported,
@@ -197,8 +197,10 @@ fn test_queued_typeahead_shell_reported() {
     assert_eq!(block_list.early_output().typeahead(), "second");
     // Unlike regular blocks, if the output grid of a background block is cleared
     // then it becomes hidden.
-    assert!(block_list
-        .background_block_mut()
-        .expect("Block should exist")
-        .is_empty(&crate::terminal::model::block::TranscriptScope::Terminal));
+    assert!(
+        block_list
+            .background_block_mut()
+            .expect("Block should exist")
+            .is_empty(&crate::terminal::model::block::TranscriptScope::Terminal)
+    );
 }

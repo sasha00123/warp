@@ -1,7 +1,7 @@
 [package]
 name = "mcp"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish.workspace = true
 license.workspace = true
 
@@ -12,6 +12,7 @@ async-trait.workspace = true
 cfg-if.workspace = true
 cloud_object_models.workspace = true
 futures.workspace = true
+handlebars.workspace = true
 http = "1"
 log.workspace = true
 oauth2.workspace = true

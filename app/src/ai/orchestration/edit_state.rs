@@ -21,6 +21,7 @@ use super::providers::{
     resolve_default_environment_id,
 };
 use crate::ai::harness_availability::{AuthSecretFetchState, HarnessAvailabilityModel};
+use crate::workspaces::user_workspaces::TeamScope;
 
 impl OrchestrationConfigState {
     /// Toggles Local ↔ Cloud, pre-fills the default environment when
@@ -48,13 +49,23 @@ impl OrchestrationConfigState {
 
     /// Records the auth-secret picker choice (`None` means Inherit) and
     /// persists it to `CloudAgentSettings`.
-    pub fn apply_auth_secret_change(&mut self, new_name: Option<String>, ctx: &mut AppContext) {
+    pub fn apply_auth_secret_change<S: TeamScope + ?Sized>(
+        &mut self,
+        team_scope: &S,
+        new_name: Option<String>,
+        ctx: &mut AppContext,
+    ) {
         let normalized = new_name.filter(|s| !s.trim().is_empty());
         self.auth_secret_selection = match normalized {
             Some(name) => AuthSecretSelection::Named(name),
             None => AuthSecretSelection::Inherit,
         };
-        persist_auth_secret_selection(&self.harness_type, &self.auth_secret_selection, ctx);
+        persist_auth_secret_selection(
+            team_scope,
+            &self.harness_type,
+            &self.auth_secret_selection,
+            ctx,
+        );
     }
 
     /// Revalidates the state after a live catalog change: resets a
@@ -62,11 +73,15 @@ impl OrchestrationConfigState {
     /// secret, and re-seeds an `Unset` selection from persisted settings.
     /// This is the frontend-neutral core of the GUI's
     /// `repopulate_all_pickers`.
-    pub fn revalidate_after_catalog_change(&mut self, ctx: &AppContext) {
+    pub fn revalidate_after_catalog_change<S: TeamScope + ?Sized>(
+        &mut self,
+        team_scope: &S,
+        ctx: &AppContext,
+    ) {
         let loaded_secret_names = Harness::parse_orchestration_harness(&self.harness_type)
             .filter(|harness| *harness != Harness::Oz)
             .and_then(|harness| {
-                match HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(harness) {
+                match HarnessAvailabilityModel::as_ref(ctx).auth_secrets_for(team_scope, harness) {
                     AuthSecretFetchState::Loaded(secrets) => {
                         Some(secrets.iter().map(|s| s.name.clone()).collect::<Vec<_>>())
                     }
@@ -75,7 +90,8 @@ impl OrchestrationConfigState {
                     | AuthSecretFetchState::Failed(_) => None,
                 }
             });
-        let reseeded_selection = resolve_auth_secret_selection_for_harness(&self.harness_type, ctx);
+        let reseeded_selection =
+            resolve_auth_secret_selection_for_harness(team_scope, &self.harness_type, ctx);
         self.revalidate_after_catalog_change_core(
             loaded_secret_names.as_deref(),
             reseeded_selection,
@@ -98,14 +114,12 @@ impl OrchestrationConfigState {
         let is_local = !self.execution_mode.is_remote();
         // Pre-fill environment with the last-selected one when switching
         // to Cloud.
-        if is_remote {
-            if let RunAgentsExecutionMode::Remote { environment_id, .. } = &self.execution_mode {
-                if environment_id.is_empty() {
-                    if let Some(default_env) = default_environment_id {
-                        self.set_environment_id(default_env);
-                    }
-                }
-            }
+        if is_remote
+            && let RunAgentsExecutionMode::Remote { environment_id, .. } = &self.execution_mode
+            && environment_id.is_empty()
+            && let Some(default_env) = default_environment_id
+        {
+            self.set_environment_id(default_env);
         }
         self.reset_model_if_invalid(
             fallback_base_model_id,
@@ -131,18 +145,17 @@ impl OrchestrationConfigState {
             self.sanitize_for_local_execution();
         }
         // Reset model if it disappeared from the harness's catalog.
-        if !model_is_valid(&self.model_id, &self.harness_type, is_local) {
-            if let Some(first_id) = default_model_id(&self.harness_type) {
-                self.model_id = first_id;
-            }
+        if !model_is_valid(&self.model_id, &self.harness_type, is_local)
+            && let Some(first_id) = default_model_id(&self.harness_type)
+        {
+            self.model_id = first_id;
         }
         // Drop any `Named(_)` selection whose secret no longer exists.
         if let (Some(names), AuthSecretSelection::Named(name)) =
             (loaded_secret_names, &self.auth_secret_selection)
+            && !names.iter().any(|n| n == name)
         {
-            if !names.iter().any(|n| n == name) {
-                self.auth_secret_selection = AuthSecretSelection::Unset;
-            }
+            self.auth_secret_selection = AuthSecretSelection::Unset;
         }
         // Re-seed `Unset` from persisted settings. Leaves `Inherit` alone.
         // Uses the full selection resolver so a prior explicit Inherit is
@@ -200,13 +213,15 @@ impl OrchestrationEditState {
     /// harness, restores a previously saved (still valid) model for the
     /// new harness or falls back to a default, and re-resolves the auth
     /// secret selection for the new harness.
-    pub fn apply_harness_change(
+    pub fn apply_harness_change<S: TeamScope + ?Sized>(
         &mut self,
+        team_scope: &S,
         new_harness_type: &str,
         fallback_base_model_id: Option<String>,
         ctx: &mut AppContext,
     ) {
-        let resolved_auth = resolve_auth_secret_selection_for_harness(new_harness_type, ctx);
+        let resolved_auth =
+            resolve_auth_secret_selection_for_harness(team_scope, new_harness_type, ctx);
         let ctx: &AppContext = ctx;
         self.apply_harness_change_core(
             new_harness_type,

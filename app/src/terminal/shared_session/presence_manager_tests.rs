@@ -14,7 +14,7 @@ use crate::terminal::model::ansi::{
 };
 use crate::terminal::model::blocks::BlockList;
 use crate::terminal::model::test_utils::TestBlockListBuilder;
-use crate::terminal::shared_session::presence_manager::{PresenceManager, PRESET_COLORS};
+use crate::terminal::shared_session::presence_manager::{PRESET_COLORS, PresenceManager};
 
 fn viewer_with_uid(uid: &str, is_present: bool) -> Viewer {
     Viewer {
@@ -422,4 +422,47 @@ fn test_selected_block_index_for_avatar() {
             assert_eq!(index, 7.into())
         });
     });
+}
+
+#[test]
+fn query_attribution_profile_retains_absent_viewers_without_using_the_sharer() {
+    let sharer_id = ParticipantId::new();
+    let mut manager = PresenceManager::new_for_sharer(sharer_id.clone(), UserUid::new("host"));
+    let viewer_id = ParticipantId::new();
+    let info = ParticipantInfo {
+        id: viewer_id.clone(),
+        profile_data: ProfileData {
+            firebase_uid: "viewer".into(),
+            email: Some("viewer@example.com".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    manager.present_viewers.insert(
+        viewer_id.clone(),
+        super::Participant {
+            info: info.clone(),
+            color: PRESET_COLORS[0],
+            role: Some(Role::Executor),
+        },
+    );
+    assert_eq!(
+        manager
+            .participant_profile(&viewer_id)
+            .unwrap()
+            .firebase_uid,
+        "viewer"
+    );
+    manager.present_viewers.remove(&viewer_id);
+    manager.absent_viewers.insert(
+        viewer_id.clone(),
+        super::AbsentViewer {
+            participant_info: info,
+        },
+    );
+    let profile = manager.participant_profile(&viewer_id).unwrap();
+    assert_eq!(profile.firebase_uid, "viewer");
+    assert_eq!(profile.email.as_deref(), Some("viewer@example.com"));
+    assert!(manager.participant_profile(&sharer_id).is_none());
+    assert!(manager.participant_profile(&ParticipantId::new()).is_none());
 }
