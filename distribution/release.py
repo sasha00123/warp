@@ -16,7 +16,7 @@ def assemble(version, commit):
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
     artifacts = []
-    for arch in ("arm64", "x86_64"):
+    for arch in ("arm64",):
         manifest = json.loads((dist / f"manifest-{arch}.json").read_text())
         name = f'{config["cask"]}-{version}-macos-{arch}.zip'
         if any(manifest[key] != value for key, value in {
@@ -60,7 +60,7 @@ def assemble(version, commit):
         'Includes original license notices and locked dependencies.\n\n'
         'Ad-hoc signed, not Developer ID signed or notarized. macOS may require Open Anyway. '
         'No automatic upstream updates. Update via GitHub Releases or the personal Homebrew tap.\n\n'
-        'Maintainer: smoke-test both architecture builds before publishing this draft.\n')
+        'Apple Silicon (M-series Macs) only; macOS 13 or later. Intel Macs are not supported.\n')
 
 if __name__ == "__main__":
     assemble(*sys.argv[1:])

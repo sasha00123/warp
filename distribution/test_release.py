@@ -22,7 +22,7 @@ class ReleaseValidation(unittest.TestCase):
         self.config = {"cask": "zed-custom", "bundle_id": "io.sasha00123.ZedCustom", "repository": "sasha00123/zed", "app_name": "Zed Custom"}
         (self.root / "distribution/config.json").write_text(json.dumps(self.config))
         self.commit = "a" * 40
-        for arch in ("arm64", "x86_64"):
+        for arch in ("arm64",):
             name = f"zed-custom-1.2.3-macos-{arch}.zip"
             (self.root / "dist" / name).write_bytes(b"test bundle")
             data = {**self.config, "version": "1.2.3", "commit": self.commit, "architecture": arch, "asset": name,
@@ -42,7 +42,7 @@ class ReleaseValidation(unittest.TestCase):
         git("add", "distribution", "Cargo.lock")
         git("commit", "-m", "Source fixture")
         self.commit = git("rev-parse", "HEAD")
-        for arch in ("arm64", "x86_64"):
+        for arch in ("arm64",):
             path = self.root / f"dist/manifest-{arch}.json"
             data = json.loads(path.read_text()); data["commit"] = self.commit
             path.write_text(json.dumps(data))
@@ -64,6 +64,7 @@ class ReleaseValidation(unittest.TestCase):
             self.assertEqual(manifest[0]["name"], "example")
         manifest = json.loads((self.root / "dist/homebrew.json").read_text())
         self.assertEqual(manifest["commit"], self.commit)
+        self.assertEqual([asset["architecture"] for asset in manifest["assets"]], ["arm64"])
         for line in (self.root / "dist/SHA256SUMS").read_text().splitlines():
             checksum, filename = line.split("  ")
             self.assertEqual(checksum, hashlib.sha256((self.root / "dist" / filename).read_bytes()).hexdigest())
@@ -75,7 +76,7 @@ class ReleaseValidation(unittest.TestCase):
             release.assemble("1.2.3", self.commit)
 
     def test_refuses_missing_architecture(self):
-        (self.root / "dist/manifest-x86_64.json").unlink()
+        (self.root / "dist/manifest-arm64.json").unlink()
         with self.assertRaises(FileNotFoundError):
             release.assemble("1.2.3", self.commit)
 

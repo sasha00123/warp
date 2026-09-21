@@ -93,4 +93,4 @@ jobs:
               echo 'PR changed during the build; rerun against its current merge ref.' >&2
             fi
           fi
-          gh api "repos/$GH_REPO/statuses/$STATUS_SHA" -f state="$state" -f context='personal/ci' -f target_url="$RUN_URL" -f description='Validation and both macOS builds'
+          gh api "repos/$GH_REPO/statuses/$STATUS_SHA" -f state="$state" -f context='personal/ci' -f target_url="$RUN_URL" -f description='Validation and Apple Silicon build'
