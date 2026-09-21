@@ -70,9 +70,8 @@ pub use crate::terminal::history::HistoryEntry;
 use crate::terminal::model::ansi;
 use crate::terminal::model::ansi::{
     ClearValue, CommandFinishedValue, CompletionMetadata, ExitShellValue, Handler, InitShellValue,
-    InitSshValue,
-    InitSubshellValue, PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue, SSHValue,
-    PromptMetadata, SourcedRcFileForWarpValue,
+    InitSshValue, InitSubshellValue, PreInteractiveSSHSessionValue, PrecmdValue, PreexecValue,
+    PromptMetadata, SSHValue, SourcedRcFileForWarpValue,
 };
 use crate::terminal::model::bootstrap::BootstrapStage;
 use crate::terminal::model::completions::{
@@ -3282,13 +3281,12 @@ impl ansi::Handler for TerminalModel {
                     extra: { "shell" => %data.shell }
                 );
                 if is_tmux_ssh {
-                    self.event_proxy.send_terminal_event(
-                        Event::RemoteWarpificationIsUnavailable(
+                    self.event_proxy
+                        .send_terminal_event(Event::RemoteWarpificationIsUnavailable(
                             WarpificationUnavailableReason::UnsupportedShell {
                                 shell_name: data.shell,
                             },
-                        ),
-                    );
+                        ));
                 }
             }
         }
@@ -3519,9 +3517,7 @@ impl ansi::Handler for TerminalModel {
                     TmuxCommand::SetPersistentWorkspaceOptions,
                 ));
 
-                self.emit_handler_event(HandlerEvent::RunTmuxCommand(
-                    TmuxCommand::ListWorkspaces,
-                ));
+                self.emit_handler_event(HandlerEvent::RunTmuxCommand(TmuxCommand::ListWorkspaces));
 
                 self.emit_handler_event(HandlerEvent::RunTmuxCommand(
                     TmuxCommand::UpdateClientSize { num_cols, num_rows },

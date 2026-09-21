@@ -24,8 +24,8 @@ use crate::completer::SessionContext;
 use crate::context_chips::display_chip::{DisplayChipAction, PromptChipShellCommand};
 use crate::settings::InputSettings;
 use crate::terminal::input::MenuPositioningProvider;
-use crate::terminal::model_events::ModelEventDispatcher;
 use crate::terminal::model::tmux::commands::{TmuxCommand, TmuxWorkspace};
+use crate::terminal::model_events::ModelEventDispatcher;
 
 /// Enum introduced to abstract over the different row types we use for the prompt display,
 /// between the non-UDI and UDI cases.
@@ -173,7 +173,9 @@ impl PromptDisplay {
     ) {
         for chip in &self.display_chips {
             let workspaces = workspaces.clone();
-            chip.update(ctx, |chip, ctx| chip.update_tmux_workspaces(workspaces, ctx));
+            chip.update(ctx, |chip, ctx| {
+                chip.update_tmux_workspaces(workspaces, ctx)
+            });
         }
     }
 

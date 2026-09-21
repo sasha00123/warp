@@ -1814,11 +1814,9 @@ impl<'a, H: Handler + 'a, W: io::Write> TmuxPerformer<'a, H, W> {
                         .on_finish_byte_processing(&ProcessorInput::new(&bytes));
                 } else {
                     for byte in bytes {
-                        self.handler
-                            .tmux_control_mode_event(ControlModeEvent::BackgroundPaneOutput {
-                                pane,
-                                byte,
-                            });
+                        self.handler.tmux_control_mode_event(
+                            ControlModeEvent::BackgroundPaneOutput { pane, byte },
+                        );
                     }
                 }
             }
@@ -1948,7 +1946,9 @@ where
                     }
                     if !workspaces.is_empty() {
                         self.handler
-                            .tmux_control_mode_event(ControlModeEvent::WorkspaceSnapshot(workspaces));
+                            .tmux_control_mode_event(ControlModeEvent::WorkspaceSnapshot(
+                                workspaces,
+                            ));
                     }
                 } else {
                     self.state.pending_history_capture = None;

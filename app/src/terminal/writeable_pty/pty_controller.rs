@@ -20,8 +20,8 @@ use crate::terminal::model::completions::ShellCompletion;
 use crate::terminal::model::session::{
     ExecutorCommandEvent, InBandCommandCancelledEvent, SessionInfo, Sessions,
 };
-use crate::terminal::model::{escape_sequences, StartCommandOutcome};
 use crate::terminal::model::tmux::commands::TmuxCommand;
+use crate::terminal::model::{escape_sequences, StartCommandOutcome};
 use crate::terminal::model_events::{AnsiHandlerEvent, ModelEvent, ModelEventDispatcher};
 use crate::terminal::shell::ShellType;
 use crate::terminal::view::LINEFEED_REGEX;

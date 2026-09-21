@@ -549,9 +549,7 @@ impl ContextChipKind {
             Self::VirtualEnvironment
             | Self::CondaEnvironment
             | Self::Subshell
-            | Self::TmuxWorkspace => {
-                Some(Icon::Terminal)
-            }
+            | Self::TmuxWorkspace => Some(Icon::Terminal),
             Self::NodeVersion => Some(Icon::NodeJS),
             Self::ShellGitBranch | Self::GitBranchStatus | Self::SvnBranch => Some(Icon::GitBranch),
             Self::GitDiffStats | Self::SvnDirtyItems => Some(Icon::File),

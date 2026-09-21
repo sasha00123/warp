@@ -301,45 +301,45 @@ impl DisplayChipMenu {
             | ChipMenuType::Branches
             | ChipMenuType::TmuxWorkspaces
             | ChipMenuType::Environments => Some(ctx.add_typed_action_view(|ctx| {
-                    let appearance = Appearance::handle(ctx).as_ref(ctx);
+                let appearance = Appearance::handle(ctx).as_ref(ctx);
 
-                    let text_options = match chip_menu_type {
-                        ChipMenuType::Environments => {
-                            TextOptions::ui_text(Some(ENV_MENU_ITEM_FONT_SIZE), appearance)
-                        }
-                        ChipMenuType::Directories
-                        | ChipMenuType::Branches
-                        | ChipMenuType::TmuxWorkspaces
-                        | ChipMenuType::CodeReview => {
-                            let ui_font_family = appearance.ui_font_family();
-                            let mut options = TextOptions::ui_font_size(appearance);
-                            options.font_family_override = Some(ui_font_family);
-                            options
-                        }
-                    };
+                let text_options = match chip_menu_type {
+                    ChipMenuType::Environments => {
+                        TextOptions::ui_text(Some(ENV_MENU_ITEM_FONT_SIZE), appearance)
+                    }
+                    ChipMenuType::Directories
+                    | ChipMenuType::Branches
+                    | ChipMenuType::TmuxWorkspaces
+                    | ChipMenuType::CodeReview => {
+                        let ui_font_family = appearance.ui_font_family();
+                        let mut options = TextOptions::ui_font_size(appearance);
+                        options.font_family_override = Some(ui_font_family);
+                        options
+                    }
+                };
 
-                    let options = EditorOptions {
-                        autogrow: false,
-                        soft_wrap: false,
-                        single_line: true,
-                        text: text_options,
-                        propagate_and_no_op_vertical_navigation_keys:
-                            PropagateAndNoOpNavigationKeys::Always,
-                        ..Default::default()
-                    };
-                    let mut editor = EditorView::new(options, ctx);
-                    let placeholder_text = match chip_menu_type {
-                        ChipMenuType::Directories => "Search directories...",
-                        ChipMenuType::Branches => "Search branches...",
-                        ChipMenuType::TmuxWorkspaces => "Search tmux pages...",
-                        ChipMenuType::Environments => "Search environments...",
-                        ChipMenuType::CodeReview => {
-                            unreachable!("search input should not be constructed")
-                        }
-                    };
-                    editor.set_placeholder_text(placeholder_text, ctx);
-                    editor
-                })),
+                let options = EditorOptions {
+                    autogrow: false,
+                    soft_wrap: false,
+                    single_line: true,
+                    text: text_options,
+                    propagate_and_no_op_vertical_navigation_keys:
+                        PropagateAndNoOpNavigationKeys::Always,
+                    ..Default::default()
+                };
+                let mut editor = EditorView::new(options, ctx);
+                let placeholder_text = match chip_menu_type {
+                    ChipMenuType::Directories => "Search directories...",
+                    ChipMenuType::Branches => "Search branches...",
+                    ChipMenuType::TmuxWorkspaces => "Search tmux pages...",
+                    ChipMenuType::Environments => "Search environments...",
+                    ChipMenuType::CodeReview => {
+                        unreachable!("search input should not be constructed")
+                    }
+                };
+                editor.set_placeholder_text(placeholder_text, ctx);
+                editor
+            })),
             ChipMenuType::CodeReview => None,
         };
 
@@ -545,9 +545,11 @@ impl DisplayChipMenu {
         item: Arc<dyn GenericMenuItem>,
         ctx: &mut ViewContext<Self>,
     ) {
-        ctx.emit(PromptDisplayMenuEvent::SecondaryMenuAction(GenericMenuEvent {
-            action_item: item.clone(),
-        }));
+        ctx.emit(PromptDisplayMenuEvent::SecondaryMenuAction(
+            GenericMenuEvent {
+                action_item: item.clone(),
+            },
+        ));
         ctx.notify();
     }
 
@@ -1488,7 +1490,9 @@ impl View for DisplayChipMenu {
                 ChipMenuType::Directories
                 | ChipMenuType::Branches
                 | ChipMenuType::TmuxWorkspaces
-                | ChipMenuType::CodeReview => menu_container.with_drop_shadow(DropShadow::default()),
+                | ChipMenuType::CodeReview => {
+                    menu_container.with_drop_shadow(DropShadow::default())
+                }
             };
 
             ConstrainedBox::new(menu_container.finish())
