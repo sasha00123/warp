@@ -57,9 +57,7 @@ jobs:
           merge-multiple: true
           path: dist
       - name: Preserve corresponding dependency sources
-        run: |
-          mkdir -p target
-          cargo vendor --locked target/personal-vendor > target/personal-vendor-config.toml
+        run: python3 distribution/preserve_sources.py
       - name: Assemble immutable release assets
         env:
           VERSION: ${{ inputs.version }}

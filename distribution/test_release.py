@@ -46,10 +46,10 @@ class ReleaseValidation(unittest.TestCase):
             path = self.root / f"dist/manifest-{arch}.json"
             data = json.loads(path.read_text()); data["commit"] = self.commit
             path.write_text(json.dumps(data))
-        vendor = self.root / "target/personal-vendor/example"
+        vendor = self.root / "target/personal-dependency-sources/example"
         vendor.mkdir(parents=True)
         (vendor / "LICENSE").write_text("Dependency license fixture")
-        (self.root / "target/personal-vendor-config.toml").write_text('[source.vendored-sources]\ndirectory = "target/personal-vendor"\n')
+        (vendor.parent / "manifest.json").write_text('[{"name":"example"}]\n')
 
     def test_release_contains_corresponding_source_and_dependencies(self):
         self.prepare_source()
@@ -58,10 +58,10 @@ class ReleaseValidation(unittest.TestCase):
         prefix = "zed-custom-1.2.3-source/"
         with tarfile.open(source) as archive:
             self.assertIn(prefix + "Cargo.lock", archive.getnames())
-            self.assertIn(prefix + "vendor/example/LICENSE", archive.getnames())
+            self.assertIn(prefix + "dependency-sources/example/LICENSE", archive.getnames())
             self.assertFalse(any("/.git/" in name or "/dist/" in name for name in archive.getnames()))
-            config = archive.extractfile(prefix + "distribution/vendor-config.toml").read().decode()
-            self.assertIn('directory = "vendor"', config)
+            manifest = json.load(archive.extractfile(prefix + "dependency-sources/manifest.json"))
+            self.assertEqual(manifest[0]["name"], "example")
         manifest = json.loads((self.root / "dist/homebrew.json").read_text())
         self.assertEqual(manifest["commit"], self.commit)
         for line in (self.root / "dist/SHA256SUMS").read_text().splitlines():

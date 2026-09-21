@@ -40,16 +40,10 @@ def assemble(version, commit):
         for name in tracked:
             if name:
                 archive.add(ROOT / name, arcname=f"{prefix}/{name}", recursive=False)
-        vendor = ROOT / "target/personal-vendor"
-        if not vendor.is_dir():
-            raise ValueError("Missing vendored dependency sources")
-        archive.add(vendor, arcname=f"{prefix}/vendor")
-        vendor_config = (ROOT / "target/personal-vendor-config.toml").read_text().replace("target/personal-vendor", "vendor")
-        import io
-        info = tarfile.TarInfo(f"{prefix}/distribution/vendor-config.toml")
-        data = vendor_config.encode()
-        info.size = len(data)
-        archive.addfile(info, io.BytesIO(data))
+        dependencies = ROOT / "target/personal-dependency-sources"
+        if not (dependencies / "manifest.json").is_file():
+            raise ValueError("Missing corresponding dependency source snapshots")
+        archive.add(dependencies, arcname=f"{prefix}/dependency-sources")
     output = {**config, "version": version, "tag": f"personal-v{version}", "commit": commit, "assets": artifacts,
               "source_asset": source.name, "signing": "ad-hoc; not notarized"}
     (dist / "homebrew.json").write_text(json.dumps(output, indent=2) + "\n")
