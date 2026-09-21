@@ -13,7 +13,13 @@ for path in (root / "distribution").glob("*.sh"):
 for path in (root / ".github/workflows").glob("personal-*.yml"):
     text = path.read_text()
     assert "pull_request_target" not in text
-    assert "secrets." not in text, "Unsigned workflows must not receive signing credentials"
+    if path.name == "personal-sync.yml":
+        assert text.count("${{ secrets.UPSTREAM_SYNC_SSH_KEY }}") == 2
+        assert "environment: upstream-sync" in text
+        assert "github.ref == 'refs/heads/personal/main'" in text
+        assert "ssh-key: ${{ secrets.UPSTREAM_SYNC_SSH_KEY }}" in text
+        text = text.replace("${{ secrets.UPSTREAM_SYNC_SSH_KEY }}", "")
+    assert not re.search(r"\bsecrets(?:\.|\s*\[)", text), "Only protected upstream sync may use its scoped deploy key"
     assert not re.search(r"^\s+runs-on:.*self-hosted", text, re.M)
 if config["executable"] == "zed":
     build = (root / "distribution/build-macos.sh").read_text()

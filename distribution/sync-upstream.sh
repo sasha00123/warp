@@ -18,6 +18,6 @@ if ! git merge-base --is-ancestor "$sha" origin/personal/main; then
   if [[ "$existing" == 0 ]]; then
     gh pr create --repo "$GH_REPO" --base personal/main --head main \
       --title "Integrate upstream updates" \
-      --body "Advance the personal distribution to upstream $sha. Main was updated by fast-forward only. Resolve conflicts in an integration branch and run Personal CI manually with source_ref=refs/pull/NUMBER/merge before merging: GITHUB_TOKEN-created PRs do not automatically start CI."
+      --body "Advance the personal distribution to upstream $sha. Main was updated by fast-forward only. Resolve conflicts in an integration branch and run Personal CI manually with source_ref=refs/pull/NUMBER/merge before merging: GITHUB_TOKEN-created PRs require workflow approval or a manual CI run."
   fi
 fi

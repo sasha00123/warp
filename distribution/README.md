@@ -7,12 +7,18 @@ Unofficial build of Warp; not affiliated with its upstream developer.
 - `main` is an exact, fast-forward-only mirror of `warpdotdev/warp/master`.
 - `feature/*` contains one independent change. Start from a suitable upstream commit, open a PR to `personal/main`, and merge with a merge commit to preserve feature history.
 - `personal/main` contains reviewed features and these distribution files. Set it as the GitHub default branch **after merging this PR** so scheduled and manual workflows are discoverable. Never merge distribution code into `main`.
-- Upstream sync advances `main` only if it is an ancestor of upstream; divergence fails without force-pushing. Integration is an explicit `main` → `personal/main` PR. A sync generated with `GITHUB_TOKEN` does not trigger another workflow; run Personal CI manually on the PR merge ref before merging (see below).
+- Upstream sync advances `main` only if it is an ancestor of upstream; divergence fails without force-pushing. Integration is an explicit `main` → `personal/main` PR. A PR created with `GITHUB_TOKEN` does not start CI automatically without approval; approve its workflow runs or run Personal CI manually on the PR merge ref before merging (see below).
 - Protect `personal/main` against deletion and force pushes; require the `personal/ci` commit status (validation and both macOS builds). Leave “Require branches to be up to date” unchecked: feature branches must remain based on the upstream mirror, without other personal features merged back into them. CI builds the PR merge commit and reports `personal/ci` on its head, checking that neither parent changed during the build. With this non-strict branch protection, a later base update does not invalidate a successful head status automatically: rerun CI on the current PR merge ref after every base update and before merging another feature. Protect `main` against deletion/force pushes but permit the sync bot's fast-forward updates. Avoid requiring distribution checks on `main`.
+
+## Upstream sync credentials
+
+`GITHUB_TOKEN` cannot push new or changed workflow files from upstream. Sync therefore checks out with a dedicated SSH deploy key that has write access to this fork only. Its private key is the `UPSTREAM_SYNC_SSH_KEY` secret in the `upstream-sync` environment. Restrict that environment to the **branch** `personal/main` (not tags); PR refs and feature branches must not match. The sync job also checks its branch before entering the environment. No private key belongs in Git, release archives, PR CI or local build artifacts. The checkout action verifies GitHub's SSH host key and removes the credential after the job. The normal GitHub token has only contents-read and PR-write access for opening the integration PR.
+
+Keep `main` and `personal/main` protected from force pushes/deletion, including administrators. Rotate a sync credential by creating a new repository-specific deploy key, replacing the environment secret, verifying a sync run, and deleting the old deploy key in repository settings. Deploy keys do not expire automatically. These keys do not provide access to other repositories or the user's account.
 
 ## Build and release
 
-Personal CI builds PR merge commits and every push to `personal/main`, using ordinary hosted macOS Apple Silicon and Intel runners. PR jobs have read-only tokens and no signing secrets. Artifacts expire after 14 days.
+Personal CI builds PR merge commits and every push to `personal/main`, using ordinary hosted macOS Apple Silicon and Intel runners. PR jobs have read-only tokens and no signing or sync secrets. Artifacts expire after 14 days.
 
 Run `Personal CI` with ref `personal/main` and `source_ref=refs/pull/NUMBER/merge` to validate a bot-created upstream PR. Its artifact is a test build only. The result is posted as `personal/ci` on the PR head after verifying the head and base still match the tested merge. The same required check applies to bot-created PRs. For outside-fork PRs, a maintainer must run this manual validation after review because their read-only token cannot post commit statuses. Resolve conflicts on a separate integration branch before testing.
 
