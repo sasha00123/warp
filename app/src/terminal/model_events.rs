@@ -10,7 +10,7 @@ use super::model::ansi::{FinishUpdateValue, WarpificationUnavailableReason};
 use super::model::block::BlockId;
 use super::model::completions::ShellCompletion;
 use super::model::lifecycle::LifecycleTelemetryEvent;
-use super::model::session::{IsLegacySSHSession, IsSSHWrapperSession, SessionId, SessionInfo};
+use super::model::session::{IsLegacySSHSession, SessionId, SessionInfo};
 use super::model::terminal_model::{
     CommandType, ExitReason, HandlerEvent, TmuxControlModeContext, TmuxInstallationState,
 };
