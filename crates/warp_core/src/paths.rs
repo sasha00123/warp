@@ -37,7 +37,7 @@ fn base_warp_config_dir_name() -> String {
         // Preview shares the same directory as Stable for backward
         // compatibility — existing users already have config in `.warp`.
         Channel::Stable | Channel::Preview => WARP_CONFIG_DIR.to_owned(),
-        Channel::Oss => format!("{WARP_CONFIG_DIR}-oss"),
+        Channel::Oss => format!("{WARP_CONFIG_DIR}-custom"),
         Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
         Channel::Integration => format!("{WARP_CONFIG_DIR}-integration"),
         Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
@@ -86,7 +86,7 @@ fn macos_config_dir_name() -> String {
     match ChannelState::channel() {
         Channel::Stable => WARP_CONFIG_DIR.to_owned(),
         Channel::Preview => format!("{WARP_CONFIG_DIR}-preview"),
-        Channel::Oss => format!("{WARP_CONFIG_DIR}-oss"),
+        Channel::Oss => format!("{WARP_CONFIG_DIR}-custom"),
         Channel::Dev => format!("{WARP_CONFIG_DIR}-dev"),
         Channel::Integration => format!("{WARP_CONFIG_DIR}-integration"),
         Channel::Local => format!("{WARP_CONFIG_DIR}-local"),
@@ -197,8 +197,9 @@ pub fn state_dir() -> PathBuf {
 ///
 /// On macOS, this will use the App Group container directory if available.
 pub fn secure_state_dir() -> Option<PathBuf> {
-    // Do not use the secure state directory in integration tests, which have a temporary home directory instead.
-    if ChannelState::channel() == Channel::Integration {
+    // Integration tests use a temporary home. The OSS distribution must not use
+    // the official application's Apple Team App Group container.
+    if matches!(ChannelState::channel(), Channel::Integration | Channel::Oss) {
         return None;
     }
 

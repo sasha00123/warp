@@ -8,11 +8,11 @@ fn test_data_dir_path() {
     // ChannelState, by default, is configured for Channel::Oss.
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(data_dir(), home_dir.join(".warp-oss"));
+            assert_eq!(data_dir(), home_dir.join(".warp-custom"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            assert_eq!(data_dir(), home_dir.join(".local/share/warp-oss"));
+            assert_eq!(data_dir(), home_dir.join(".local/share/warp-terminal-custom"));
         } else if #[cfg(windows)] {
-            assert_eq!(data_dir(), home_dir.join("AppData\\Roaming\\warp\\WarpOss\\data"));
+            assert_eq!(data_dir(), home_dir.join("AppData\\Roaming\\sasha00123\\WarpCustom\\data"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -25,11 +25,11 @@ fn test_config_local_dir_path() {
     // ChannelState, by default, is configured for Channel::Oss.
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(config_local_dir(), home_dir.join(".warp-oss"));
+            assert_eq!(config_local_dir(), home_dir.join(".warp-custom"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            assert_eq!(config_local_dir(), home_dir.join(".config/warp-oss"));
+            assert_eq!(config_local_dir(), home_dir.join(".config/warp-terminal-custom"));
         } else if #[cfg(windows)] {
-            assert_eq!(config_local_dir(), home_dir.join("AppData\\Local\\warp\\WarpOss\\config"));
+            assert_eq!(config_local_dir(), home_dir.join("AppData\\Local\\sasha00123\\WarpCustom\\config"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -40,8 +40,8 @@ fn test_config_local_dir_path() {
 fn test_warp_home_config_dir_path() {
     let home_dir = home_dir().expect("Should be able to compute home directory");
     let expected_dir_name = match ChannelState::data_profile() {
-        Some(data_profile) => format!(".warp-oss-{data_profile}"),
-        None => ".warp-oss".to_string(),
+        Some(data_profile) => format!(".warp-custom-{data_profile}"),
+        None => ".warp-custom".to_string(),
     };
 
     assert_eq!(
@@ -80,11 +80,11 @@ fn test_cache_dir_path() {
     // ChannelState, by default, is configured for Channel::Oss.
     cfg_if::cfg_if! {
         if #[cfg(target_os = "macos")] {
-            assert_eq!(cache_dir(), home_dir.join("Library/Application Support/dev.warp.WarpOss"));
+            assert_eq!(cache_dir(), home_dir.join("Library/Application Support/io.sasha00123.WarpCustom"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            assert_eq!(cache_dir(), home_dir.join(".cache/warp-oss"));
+            assert_eq!(cache_dir(), home_dir.join(".cache/warp-terminal-custom"));
         } else if #[cfg(windows)] {
-            assert_eq!(cache_dir(), home_dir.join("AppData\\Local\\warp\\WarpOss\\cache"));
+            assert_eq!(cache_dir(), home_dir.join("AppData\\Local\\sasha00123\\WarpCustom\\cache"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -97,11 +97,11 @@ fn test_state_dir_path() {
     cfg_if::cfg_if! {
         // ChannelState, by default, is configured for Channel::Oss.
         if #[cfg(target_os = "macos")] {
-            assert_eq!(state_dir(), home_dir.join("Library/Application Support/dev.warp.WarpOss"));
+            assert_eq!(state_dir(), home_dir.join("Library/Application Support/io.sasha00123.WarpCustom"));
         } else if #[cfg(any(target_os = "linux", target_os = "freebsd"))] {
-            assert_eq!(state_dir(), home_dir.join(".local/state/warp-oss"));
+            assert_eq!(state_dir(), home_dir.join(".local/state/warp-terminal-custom"));
         } else if #[cfg(windows)] {
-            assert_eq!(state_dir(), home_dir.join("AppData\\Local\\warp\\WarpOss\\data"));
+            assert_eq!(state_dir(), home_dir.join("AppData\\Local\\sasha00123\\WarpCustom\\data"));
         } else {
             unimplemented!("Need to update tests for current platform!");
         }
@@ -119,6 +119,12 @@ fn test_tui_state_dir_is_tui_subdir_of_gui_state_base() {
     // keep sibling — never shared — databases.
     let gui_state_base = secure_state_dir().unwrap_or_else(state_dir);
     assert_eq!(tui_dir.parent(), Some(gui_state_base.as_path()));
+}
+
+#[test]
+fn test_custom_build_does_not_use_upstream_app_group() {
+    assert_eq!(ChannelState::channel(), Channel::Oss);
+    assert_eq!(secure_state_dir(), None);
 }
 
 #[test]

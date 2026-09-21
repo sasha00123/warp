@@ -1,0 +1,12 @@
+{
+  "app_name": "Warp Custom",
+  "cask": "warp-custom",
+  "bundle_id": "io.sasha00123.WarpCustom",
+  "upstream": "warpdotdev/warp",
+  "upstream_branch": "master",
+  "executable": "warp-oss",
+  "license": "AGPL-3.0",
+  "base": "7ffccbb8",
+  "repository": "sasha00123/warp",
+  "minimum_macos": "13.0"
+}
