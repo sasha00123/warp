@@ -107,6 +107,7 @@ CODESIGN=true
 SELFSIGN=false
 OPEN_AFTER_BUNDLE=false
 READ_PASSWORDS_FROM_ENV=false
+BUNDLE_ONLY=false
 
 PARAMS=""
 while (( "$#" )); do
@@ -127,6 +128,11 @@ while (( "$#" )); do
     --skip-build)
       echo "Skipping binary build step."
       BUILD_BINARY=false
+      shift
+      ;;
+    # Hand the unsigned app to a separate distributor without creating an upstream DMG.
+    --bundle-only)
+      BUNDLE_ONLY=true
       shift
       ;;
     # Skip code signing process
@@ -243,6 +249,11 @@ done
 # set positional arguments in their proper place
 eval set -- "$PARAMS"
 
+if [[ $BUNDLE_ONLY = true && ( $ARTIFACT != app || $CODESIGN = true || $SELFSIGN = true ) ]]; then
+  echo '--bundle-only requires --artifact app and --nosign' >&2
+  exit 1
+fi
+
 # Infer a cargo profile from the bundle configuration.
 if [[ $DEBUG = true ]]; then
   CARGO_PROFILE="dev"
@@ -310,9 +321,9 @@ elif [[ $RELEASE_CHANNEL = "stable" ]]; then
     FEATURES="$FEATURES,jemalloc_pprof,heap_usage_tracking"
 elif [[ $RELEASE_CHANNEL = "oss" ]]; then
     WARP_BIN="warp-oss"
-    BUNDLE_ID="dev.warp.WarpOss"
-    WARP_APP_NAME="WarpOss"
-    WARP_SCHEME_NAME="warposs"
+    BUNDLE_ID="io.sasha00123.WarpCustom"
+    WARP_APP_NAME="Warp Custom"
+    WARP_SCHEME_NAME="warp-custom"
     # The OSS channel does not ship Sentry, so drop the cocoa_sentry feature
     # (which would otherwise pull in the Sentry framework dependency).
     FEATURES="release_bundle,extern_plist"
@@ -421,7 +432,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
 
   pushd app > /dev/null
   echo "Building and bundling $DEFAULT_TARGET for channel $RELEASE_CHANNEL and bundle id $BUNDLE_ID with profile $CARGO_PROFILE"
-  cargo bundle --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
+  cargo bundle --format osx --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --target "$DEFAULT_TARGET" --features "$FEATURES"
   popd > /dev/null
 
   echo "Adding rpath to support mac frameworks (e.g. Sentry)"
@@ -472,18 +483,18 @@ if [[ "$ARTIFACT" == "app" ]]; then
           <string>public.plain-text</string>
         </array>
       </dict>
-    </array>" "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/Info.plist
+    </array>" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Info.plist"
   fi
 
   # Temporary key that ChatGPT Desktop can use to determine if the latest version of Warp supports the ChatGPT integration.
   # Once support has been rolled out for a sufficient amount of time we (and ChatGPT) can remove this.
-  plutil -insert SUPPORTS_CHAT_GPT_WORK_WITH_APPS -bool true "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/Info.plist
+  plutil -insert SUPPORTS_CHAT_GPT_WORK_WITH_APPS -bool true "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Info.plist"
 
   # Add LSBackgroundOnly key and set it to false since we need a UI app
-  plutil -insert LSBackgroundOnly -bool false "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/Info.plist
+  plutil -insert LSBackgroundOnly -bool false "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Info.plist"
 
   # Add SMAuthorizedClients for macOS 13+ (Ventura) to support login item functionality
-  plutil -insert SMAuthorizedClients -xml "<array><string>$BUNDLE_ID</string></array>" "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/Info.plist
+  plutil -insert SMAuthorizedClients -xml "<array><string>$BUNDLE_ID</string></array>" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Info.plist"
 
   if [[ $UNIVERSAL_BINARY = true ]]; then
       if [[ $BUILD_BINARY = true ]]; then
@@ -538,8 +549,8 @@ if [[ "$ARTIFACT" == "app" ]]; then
   cp -R "$DOCK_TILE_PLUGIN_DIR" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/PlugIns/"
 
   echo "Updating plist with dock tile plugin entries"
-  plutil -insert NSDockTilePlugIn -string "WarpDockTilePlugin.docktileplugin" "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/Info.plist
-  plutil -insert MainAppBundleIdentifier -string "$BUNDLE_ID" "$BUNDLE_DIR"/$WARP_APP_NAME.app/Contents/PlugIns/WarpDockTilePlugin.docktileplugin/Contents/Info.plist
+  plutil -insert NSDockTilePlugIn -string "WarpDockTilePlugin.docktileplugin" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Info.plist"
+  plutil -insert MainAppBundleIdentifier -string "$BUNDLE_ID" "$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/PlugIns/WarpDockTilePlugin.docktileplugin/Contents/Info.plist"
 
   BUNDLED_RESOURCES_DIR="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Resources"
   echo "Preparing bundled resources..."
@@ -679,6 +690,12 @@ elif [[ "$ARTIFACT" == "tui" ]]; then
 else
   echo "Unsupported artifact: $ARTIFACT" >&2
   exit 1
+fi
+
+if [[ $BUNDLE_ONLY = true ]]; then
+  echo "Unsigned app ready at $BUNDLE_DIR/$WARP_APP_NAME.app"
+  trap - EXIT
+  exit 0
 fi
 
 ##########################################
