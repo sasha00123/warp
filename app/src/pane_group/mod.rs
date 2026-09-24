@@ -1637,18 +1637,31 @@ impl PaneGroup {
 
                 #[cfg(all(unix, feature = "local_tty"))]
                 let persistent_terminal = {
-                    use crate::terminal::persistent_tty::{bookmark::WorkspaceBookmark,
-                        terminal_manager::TerminalManager as PersistentTerminalManager};
+                    use crate::terminal::persistent_tty::{
+                        bookmark::WorkspaceBookmark,
+                        terminal_manager::TerminalManager as PersistentTerminalManager,
+                    };
                     if let Some(bookmark) = WorkspaceBookmark::load(&uuid.0)? {
                         let attachment = bookmark.attach(ctx)?;
-                        let init = PersistentTerminalManager::create_model(attachment, resources.clone(),
-                            view_size, model_event_sender.clone(), ctx.window_id(),
-                            terminal_snapshot.input_config, ctx)?;
+                        let init = PersistentTerminalManager::create_model(
+                            attachment,
+                            resources.clone(),
+                            view_size,
+                            model_event_sender.clone(),
+                            ctx.window_id(),
+                            terminal_snapshot.input_config,
+                            ctx,
+                        )?;
                         Some((init.view, init.manager))
-                    } else { None }
+                    } else {
+                        None
+                    }
                 };
                 #[cfg(not(all(unix, feature = "local_tty")))]
-                let persistent_terminal: Option<(ViewHandle<TerminalView>, ModelHandle<Box<dyn TerminalManager>>)> = None;
+                let persistent_terminal: Option<(
+                    ViewHandle<TerminalView>,
+                    ModelHandle<Box<dyn TerminalManager>>,
+                )> = None;
 
                 let chosen_shell = terminal_snapshot
                     .shell_launch_data
@@ -1705,21 +1718,26 @@ impl PaneGroup {
                             },
                         )
                 };
-                let (terminal_view, terminal_manager) = if let Some(terminal) = persistent_terminal { terminal } else { PaneGroup::create_session(
-                    startup_directory,
-                    HashMap::new(),
-                    uuid.0.as_slice(),
-                    IsSharedSessionCreator::No,
-                    resources,
-                    block_list,
-                    conversation_restoration,
-                    user_default_shell_unsupported_banner_model_handle,
-                    view_size,
-                    model_event_sender.clone(),
-                    chosen_shell,
-                    terminal_snapshot.input_config,
-                    ctx,
-                ) };
+                let (terminal_view, terminal_manager) = if let Some(terminal) = persistent_terminal
+                {
+                    terminal
+                } else {
+                    PaneGroup::create_session(
+                        startup_directory,
+                        HashMap::new(),
+                        uuid.0.as_slice(),
+                        IsSharedSessionCreator::No,
+                        resources,
+                        block_list,
+                        conversation_restoration,
+                        user_default_shell_unsupported_banner_model_handle,
+                        view_size,
+                        model_event_sender.clone(),
+                        chosen_shell,
+                        terminal_snapshot.input_config,
+                        ctx,
+                    )
+                };
 
                 let terminal_view_id = terminal_view.id();
 
@@ -5065,52 +5083,100 @@ impl PaneGroup {
     }
 
     #[cfg(all(unix, feature = "local_tty"))]
-    fn open_persistent_workspace(&mut self, source_pane: PaneId,
+    fn open_persistent_workspace(
+        &mut self,
+        source_pane: PaneId,
         attachment: crate::terminal::persistent_tty::terminal_manager::WorkspaceAttachment,
-        ctx: &mut ViewContext<Self>) {
+        ctx: &mut ViewContext<Self>,
+    ) {
         let uuid = Uuid::new_v4();
-        let saved = crate::terminal::persistent_tty::bookmark::WorkspaceBookmark::from_attachment(&attachment, ctx)
-            .and_then(|bookmark| bookmark.save(uuid.as_bytes()));
+        let saved = crate::terminal::persistent_tty::bookmark::WorkspaceBookmark::from_attachment(
+            &attachment,
+            ctx,
+        )
+        .and_then(|bookmark| bookmark.save(uuid.as_bytes()));
         if let Err(error) = saved {
-            ctx.emit(Event::ShowToast { message: format!("Cannot save workspace restore details: {error:#}"),
-                flavor: crate::view_components::ToastFlavor::Default, pane_id: Some(source_pane) });
+            ctx.emit(Event::ShowToast {
+                message: format!("Cannot save workspace restore details: {error:#}"),
+                flavor: crate::view_components::ToastFlavor::Default,
+                pane_id: Some(source_pane),
+            });
             return;
         }
-        let resources = TerminalViewResources { tips_completed: self.tips_completed.clone(),
-            server_api: self.server_api.clone(), model_event_sender: self.model_event_sender.clone() };
-        let result = crate::terminal::persistent_tty::terminal_manager::TerminalManager::create_model(
-            attachment, resources, Self::estimated_view_bounds(ctx).size(),
-            self.model_event_sender.clone(), ctx.window_id(), None, ctx);
+        let resources = TerminalViewResources {
+            tips_completed: self.tips_completed.clone(),
+            server_api: self.server_api.clone(),
+            model_event_sender: self.model_event_sender.clone(),
+        };
+        let result =
+            crate::terminal::persistent_tty::terminal_manager::TerminalManager::create_model(
+                attachment,
+                resources,
+                Self::estimated_view_bounds(ctx).size(),
+                self.model_event_sender.clone(),
+                ctx.window_id(),
+                None,
+                ctx,
+            );
         match result {
             Ok(terminal) => {
-                let pane = TerminalPane::new(uuid.as_bytes().to_vec(), terminal.manager, terminal.view,
-                    self.model_event_sender.clone(), ctx);
+                let pane = TerminalPane::new(
+                    uuid.as_bytes().to_vec(),
+                    terminal.manager,
+                    terminal.view,
+                    self.model_event_sender.clone(),
+                    ctx,
+                );
                 // The persistent pane owns an independent SSH connection.
                 // No hidden source tab is needed to keep the remote job alive.
                 self.replace_pane(source_pane, pane, false, ctx);
             }
-            Err(error) => ctx.emit(Event::ShowToast { message: format!("Cannot open workspace: {error}"),
-                flavor: crate::view_components::ToastFlavor::Default, pane_id: Some(source_pane) }),
+            Err(error) => ctx.emit(Event::ShowToast {
+                message: format!("Cannot open workspace: {error}"),
+                flavor: crate::view_components::ToastFlavor::Default,
+                pane_id: Some(source_pane),
+            }),
         }
     }
 
     #[cfg(all(unix, feature = "local_tty"))]
-    fn open_persistent_recovery(&mut self, source_pane: PaneId,
+    fn open_persistent_recovery(
+        &mut self,
+        source_pane: PaneId,
         attachment: &crate::terminal::persistent_tty::terminal_manager::WorkspaceAttachment,
-        ctx: &mut ViewContext<Self>) {
+        ctx: &mut ViewContext<Self>,
+    ) {
         let recipe = attachment.owner.as_ref(ctx).recipe().clone();
-        let command = match recipe.recovery_command(&attachment.workspace_id, &attachment.generation) {
-            Ok(command) => command,
-            Err(error) => {
-                ctx.emit(Event::ShowToast { message: format!("Cannot open recovery terminal: {error:#}"),
-                    flavor: crate::view_components::ToastFlavor::Default, pane_id: Some(source_pane) });
-                return;
-            }
-        };
-        let (pane, view) = self.create_terminal_pane_data(Some(recipe.working_directory().to_owned()),
-            HashMap::new(), IsSharedSessionCreator::No, None, None, ctx);
-        let _ = self.add_pane(Direction::Right, Some(source_pane), Box::new(pane), true, ctx);
-        view.update(ctx, |view, ctx| view.execute_command_or_set_pending(&command, ctx));
+        let command =
+            match recipe.recovery_command(&attachment.workspace_id, &attachment.generation) {
+                Ok(command) => command,
+                Err(error) => {
+                    ctx.emit(Event::ShowToast {
+                        message: format!("Cannot open recovery terminal: {error:#}"),
+                        flavor: crate::view_components::ToastFlavor::Default,
+                        pane_id: Some(source_pane),
+                    });
+                    return;
+                }
+            };
+        let (pane, view) = self.create_terminal_pane_data(
+            Some(recipe.working_directory().to_owned()),
+            HashMap::new(),
+            IsSharedSessionCreator::No,
+            None,
+            None,
+            ctx,
+        );
+        let _ = self.add_pane(
+            Direction::Right,
+            Some(source_pane),
+            Box::new(pane),
+            true,
+            ctx,
+        );
+        view.update(ctx, |view, ctx| {
+            view.execute_command_or_set_pending(&command, ctx)
+        });
         ctx.emit(Event::AppStateChanged);
     }
 

@@ -30,8 +30,10 @@ use super::{SettingsAction, SettingsSection, ToggleSettingActionPair, flags};
 use crate::appearance::Appearance;
 use crate::send_telemetry_from_ctx;
 use crate::server::telemetry::TelemetryEvent;
-use crate::settings::{PersistentHistoryRetention, PersistentHistoryRetentionSetting,
-    ReuseExistingSshControlMaster, SshSettings};
+use crate::settings::{
+    PersistentHistoryRetention, PersistentHistoryRetentionSetting, ReuseExistingSshControlMaster,
+    SshSettings,
+};
 use crate::terminal::warpify::settings::{
     EnableSshWarpification, SshExtensionInstallMode, SshExtensionInstallModeSetting,
     WarpifySettings, WarpifySettingsChangedEvent,
@@ -96,10 +98,16 @@ impl WarpifyPageView {
     pub fn new(ctx: &mut ViewContext<Self>) -> Self {
         let warpify_settings_handle = WarpifySettings::handle(ctx);
         ctx.observe(&SshSettings::handle(ctx), |me, _, ctx| {
-            let policy = *SshSettings::as_ref(ctx).persistent_history_retention.value();
-            me.persistent_history_retention_dropdown.update(ctx, |dropdown, ctx| {
-                dropdown.set_selected_by_action(WarpifyPageAction::SetPersistentHistoryRetention(policy), ctx);
-            });
+            let policy = *SshSettings::as_ref(ctx)
+                .persistent_history_retention
+                .value();
+            me.persistent_history_retention_dropdown
+                .update(ctx, |dropdown, ctx| {
+                    dropdown.set_selected_by_action(
+                        WarpifyPageAction::SetPersistentHistoryRetention(policy),
+                        ctx,
+                    );
+                });
             ctx.notify();
         });
 
@@ -142,7 +150,8 @@ impl WarpifyPageView {
 
         let ssh_extension_install_mode_dropdown =
             Self::create_ssh_extension_install_mode_dropdown(ctx);
-        let persistent_history_retention_dropdown = Self::create_persistent_history_retention_dropdown(ctx);
+        let persistent_history_retention_dropdown =
+            Self::create_persistent_history_retention_dropdown(ctx);
 
         let mut instance = Self {
             page: Self::build_page(ctx),
@@ -290,16 +299,26 @@ impl WarpifyPageView {
     fn create_persistent_history_retention_dropdown(
         ctx: &mut ViewContext<Self>,
     ) -> ViewHandle<Dropdown<WarpifyPageAction>> {
-        let policy = *SshSettings::as_ref(ctx).persistent_history_retention.value();
-        let items = PersistentHistoryRetention::iter().map(|policy| {
-            DropdownItem::new(policy.display_name(), WarpifyPageAction::SetPersistentHistoryRetention(policy))
-        }).collect();
+        let policy = *SshSettings::as_ref(ctx)
+            .persistent_history_retention
+            .value();
+        let items = PersistentHistoryRetention::iter()
+            .map(|policy| {
+                DropdownItem::new(
+                    policy.display_name(),
+                    WarpifyPageAction::SetPersistentHistoryRetention(policy),
+                )
+            })
+            .collect();
         ctx.add_typed_action_view(move |ctx| {
             let mut dropdown = Dropdown::new(ctx);
             dropdown.set_top_bar_max_width(SSH_EXTENSION_DROPDOWN_WIDTH);
             dropdown.set_menu_width(SSH_EXTENSION_DROPDOWN_WIDTH, ctx);
             dropdown.add_items(items, ctx);
-            dropdown.set_selected_by_action(WarpifyPageAction::SetPersistentHistoryRetention(policy), ctx);
+            dropdown.set_selected_by_action(
+                WarpifyPageAction::SetPersistentHistoryRetention(policy),
+                ctx,
+            );
             dropdown
         })
     }
@@ -415,7 +434,11 @@ impl TypedActionView for WarpifyPageView {
         match action {
             SetPersistentHistoryRetention(policy) => {
                 SshSettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.persistent_history_retention.set_value(*policy, ctx));
+                    report_if_error!(
+                        settings
+                            .persistent_history_retention
+                            .set_value(*policy, ctx)
+                    );
                 });
             }
             RemoveDenylistedCommand(index) => self.remove_denylisted_command(*index, ctx),
@@ -726,20 +749,24 @@ impl SettingsWidget for SSHWidget {
         add_setting(
             &mut column,
             &SshSettings::as_ref(app).persistent_history_retention,
-            || render_dropdown_item(
-                appearance,
-                "Persistent workspace history",
-                Some("Applies to new workspaces. Retained history is compressed on the remote host and uses disk until you delete the workspace. Closing a tab does not delete history. The 64 MiB option expires older output and can prevent complete block replay."),
-                None,
-                LocalOnlyIconState::for_setting(
-                    PersistentHistoryRetentionSetting::storage_key(),
-                    PersistentHistoryRetentionSetting::sync_to_cloud(),
-                    &mut self.local_only_icon_tooltip_states.borrow_mut(),
-                    app,
-                ),
-                None,
-                &view.persistent_history_retention_dropdown,
-            ),
+            || {
+                render_dropdown_item(
+                    appearance,
+                    "Persistent workspace history",
+                    Some(
+                        "Applies to new workspaces. Retained history is compressed on the remote host and uses disk until you delete the workspace. Closing a tab does not delete history. The 64 MiB option expires older output and can prevent complete block replay.",
+                    ),
+                    None,
+                    LocalOnlyIconState::for_setting(
+                        PersistentHistoryRetentionSetting::storage_key(),
+                        PersistentHistoryRetentionSetting::sync_to_cloud(),
+                        &mut self.local_only_icon_tooltip_states.borrow_mut(),
+                        app,
+                    ),
+                    None,
+                    &view.persistent_history_retention_dropdown,
+                )
+            },
         );
 
         let reuse_existing_control_master = *SshSettings::as_ref(app)

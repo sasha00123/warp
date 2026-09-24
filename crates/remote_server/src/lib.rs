@@ -6,9 +6,9 @@ pub mod host_response;
 pub mod manager;
 #[cfg(unix)]
 pub mod persistent_journal;
+pub mod persistent_replay;
 #[cfg(unix)]
 pub mod persistent_shell;
-pub mod persistent_replay;
 #[cfg(unix)]
 pub mod persistent_workspace;
 #[cfg(unix)]

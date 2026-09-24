@@ -1,7 +1,11 @@
 use super::*;
 
 fn workspace(id: &str, generation: &str) -> PersistentWorkspace {
-    PersistentWorkspace { workspace_id: id.into(), generation: generation.into(), ..Default::default() }
+    PersistentWorkspace {
+        workspace_id: id.into(),
+        generation: generation.into(),
+        ..Default::default()
+    }
 }
 
 #[test]
@@ -9,7 +13,10 @@ fn persistent_picker_actions_survive_reordering_without_retargeting() {
     let original = workspace("job-a", "first");
     let key = WorkspaceKey::from(&original);
     let refreshed = vec![workspace("job-b", "other"), original];
-    assert_eq!(find_workspace(&refreshed, &key).unwrap().workspace_id, "job-a");
+    assert_eq!(
+        find_workspace(&refreshed, &key).unwrap().workspace_id,
+        "job-a"
+    );
 }
 
 #[test]
@@ -23,15 +30,24 @@ fn persistent_picker_rejects_a_recreated_or_removed_target() {
 fn persistent_picker_surfaces_extension_errors_and_version_mismatch() {
     assert!(checked(PersistentWorkspaceResponse::default()).is_err());
     let mut response = PersistentWorkspaceResponse {
-        protocol_version: 1, management_supported: true, ..Default::default()
+        protocol_version: 1,
+        management_supported: true,
+        ..Default::default()
     };
-    assert!(checked(response.clone()).is_err(), "Management-only extensions cannot restore native blocks");
+    assert!(
+        checked(response.clone()).is_err(),
+        "Management-only extensions cannot restore native blocks"
+    );
     response.terminal_transport_supported = true;
-    assert!(checked(response.clone()).is_err(), "Live output without replay is insufficient");
+    assert!(
+        checked(response.clone()).is_err(),
+        "Live output without replay is insufficient"
+    );
     response.block_replay_supported = true;
     assert!(checked(response.clone()).is_ok());
     response.error = Some(remote_server::proto::PersistentWorkspaceError {
-        code: "stale".into(), message: "Workspace was replaced".into()
+        code: "stale".into(),
+        message: "Workspace was replaced".into(),
     });
     assert!(checked(response).unwrap_err().to_string().contains("stale"));
 }

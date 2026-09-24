@@ -553,7 +553,13 @@ mod persistent_ssh_tests {
             persistent_ssh_transport_enabled_by_default(Channel::Oss),
             cfg!(unix)
         );
-        for channel in [Channel::Stable, Channel::Preview, Channel::Dev, Channel::Local, Channel::Integration] {
+        for channel in [
+            Channel::Stable,
+            Channel::Preview,
+            Channel::Dev,
+            Channel::Local,
+            Channel::Integration,
+        ] {
             assert!(!persistent_ssh_transport_enabled_by_default(channel));
         }
     }

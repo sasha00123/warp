@@ -1,30 +1,64 @@
 use super::*;
 
 fn recipe(arguments: &[&str]) -> SshRecipe {
-    SshRecipe { working_directory: "/Users/test/projects with spaces".into(),
-        arguments: arguments.iter().map(|arg| (*arg).to_owned()).collect() }
+    SshRecipe {
+        working_directory: "/Users/test/projects with spaces".into(),
+        arguments: arguments.iter().map(|arg| (*arg).to_owned()).collect(),
+    }
 }
 
 #[test]
 fn persistent_ssh_recipe_preserves_argument_boundaries_and_jump_hosts() {
-    let original = recipe(&["-vv", "-p2222", "-F", "./ssh config", "-i", "keys/my key",
-        "-J", "jump@bastion:2200", "user@host"]);
-    let args = original.master_arguments(Path::new("/tmp/private/control")).unwrap();
+    let original = recipe(&[
+        "-vv",
+        "-p2222",
+        "-F",
+        "./ssh config",
+        "-i",
+        "keys/my key",
+        "-J",
+        "jump@bastion:2200",
+        "user@host",
+    ]);
+    let args = original
+        .master_arguments(Path::new("/tmp/private/control"))
+        .unwrap();
     assert!(args.windows(2).any(|pair| pair == ["-F", "./ssh config"]));
     assert!(args.windows(2).any(|pair| pair == ["-i", "keys/my key"]));
     assert!(args.windows(2).any(|pair| pair == ["-p", "2222"]));
-    assert!(args.windows(2).any(|pair| pair == ["-J", "jump@bastion:2200"]));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["-J", "jump@bastion:2200"])
+    );
     assert_eq!(args.last().unwrap(), "user@host");
-    assert_eq!(original.working_directory(), Path::new("/Users/test/projects with spaces"));
+    assert_eq!(
+        original.working_directory(),
+        Path::new("/Users/test/projects with spaces")
+    );
 }
 
 #[test]
 fn persistent_ssh_recipe_does_not_clone_forwarding_or_user_control_sockets() {
-    let args = recipe(&["-ttM", "-L8080:localhost:80", "-R", "9090:localhost:90",
-        "-D1080", "-S", "/tmp/user-owned", "-oControlPath=/tmp/other", "-o", "ControlMaster=auto",
-        "host"]).master_arguments(Path::new("/tmp/private/control")).unwrap();
-    assert!(!args.iter().any(|arg| arg.contains("user-owned") || arg.contains("8080")
-        || arg.contains("9090") || arg.contains("1080") || arg.contains("/tmp/other")));
+    let args = recipe(&[
+        "-ttM",
+        "-L8080:localhost:80",
+        "-R",
+        "9090:localhost:90",
+        "-D1080",
+        "-S",
+        "/tmp/user-owned",
+        "-oControlPath=/tmp/other",
+        "-o",
+        "ControlMaster=auto",
+        "host",
+    ])
+    .master_arguments(Path::new("/tmp/private/control"))
+    .unwrap();
+    assert!(!args.iter().any(|arg| arg.contains("user-owned")
+        || arg.contains("8080")
+        || arg.contains("9090")
+        || arg.contains("1080")
+        || arg.contains("/tmp/other")));
     assert_eq!(args.iter().filter(|arg| *arg == "-S").count(), 1);
     assert!(!args.iter().any(|arg| arg == "-t" || arg == "-M"));
     assert!(args.iter().any(|arg| arg == "StrictHostKeyChecking=yes"));
@@ -32,8 +66,16 @@ fn persistent_ssh_recipe_does_not_clone_forwarding_or_user_control_sockets() {
 
 #[test]
 fn persistent_ssh_recipe_rejects_commands_control_operations_and_truncation() {
-    for args in [vec!["host", "rm -rf ~"], vec!["-O", "exit", "host"], vec!["-G", "host"],
-        vec!["-f", "host"], vec!["-W", "host:22", "jump"], vec!["-i"], vec!["--"], vec!["-p", "host"]] {
+    for args in [
+        vec!["host", "rm -rf ~"],
+        vec!["-O", "exit", "host"],
+        vec!["-G", "host"],
+        vec!["-f", "host"],
+        vec!["-W", "host:22", "jump"],
+        vec!["-i"],
+        vec!["--"],
+        vec!["-p", "host"],
+    ] {
         assert!(recipe(&args).validate().is_err(), "accepted {args:?}");
     }
     assert!(SshRecipe::decode(b"EWSSH1\0/home/test\0host").is_err());
@@ -52,8 +94,20 @@ fn persistent_ssh_recipe_decodes_only_the_local_nul_delimited_format() {
 fn persistent_recovery_is_guarded_and_does_not_clone_forwardings_or_start_a_job() {
     let id = "a".repeat(32);
     let generation = "b".repeat(32);
-    let command = recipe(&["-F", "./ssh config", "-J", "jump@host", "-nNT", "-L9000:host:9",
-        "-S", "/tmp/user-master", "-oRemoteCommand=bad", "remote"]).recovery_command(&id, &generation).unwrap();
+    let command = recipe(&[
+        "-F",
+        "./ssh config",
+        "-J",
+        "jump@host",
+        "-nNT",
+        "-L9000:host:9",
+        "-S",
+        "/tmp/user-master",
+        "-oRemoteCommand=bad",
+        "remote",
+    ])
+    .recovery_command(&id, &generation)
+    .unwrap();
     assert!(command.contains("/usr/bin/ssh '-tt'"));
     assert!(command.contains("./ssh config"));
     assert!(command.contains("jump@host"));
@@ -70,7 +124,11 @@ fn persistent_recovery_is_guarded_and_does_not_clone_forwardings_or_start_a_job(
     assert!(!command.contains("RemoteCommand=bad"));
     assert!(command.contains("StrictHostKeyChecking=yes"));
     for invalid in ["", "@1", "$(touch /tmp/unsafe)", &"a".repeat(33)] {
-        assert!(recipe(&["host"]).recovery_command(invalid, &generation).is_err());
+        assert!(
+            recipe(&["host"])
+                .recovery_command(invalid, &generation)
+                .is_err()
+        );
         assert!(recipe(&["host"]).recovery_command(&id, invalid).is_err());
     }
 }

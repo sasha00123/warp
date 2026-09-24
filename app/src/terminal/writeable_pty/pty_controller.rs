@@ -150,7 +150,9 @@ impl<T: EventLoopSender> PtyController<T> {
 
         ctx.subscribe_to_model(&line_editor_status, |me, _, event, ctx| {
             if let LineEditorStatusEvent::Active = event {
-                if me.persistent_replaying { return; }
+                if me.persistent_replaying {
+                    return;
+                }
                 let input_reporting_seq = me
                     .model_event_dispatcher
                     .as_ref(ctx)
@@ -340,7 +342,10 @@ impl<T: EventLoopSender> PtyController<T> {
         ctx: &mut ModelContext<Self>,
     ) {
         if self.persistent_replaying
-            || self.terminal_model.lock().is_persistent_root_session(pending_session_info.session_id)
+            || self
+                .terminal_model
+                .lock()
+                .is_persistent_root_session(pending_session_info.session_id)
         {
             // The root workspace was initialized remotely from startup files.
             // Replaying its InitShell must never type bootstrap into its job.

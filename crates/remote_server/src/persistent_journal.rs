@@ -100,7 +100,9 @@ fn read_archive(directory: &Path, index: u64, segment_bytes: u64) -> io::Result<
         return Err(invalid("Oversized compressed journal segment"));
     }
     let mut bytes = Vec::with_capacity(segment_bytes as usize);
-    GzDecoder::new(file).take(segment_bytes + 1).read_to_end(&mut bytes)?;
+    GzDecoder::new(file)
+        .take(segment_bytes + 1)
+        .read_to_end(&mut bytes)?;
     if bytes.len() as u64 != segment_bytes {
         return Err(invalid("Invalid compressed journal segment length"));
     }
@@ -109,7 +111,9 @@ fn read_archive(directory: &Path, index: u64, segment_bytes: u64) -> io::Result<
 
 pub fn retained_storage_bytes(directory: &Path) -> io::Result<u64> {
     let snapshot = manifest(directory)?;
-    snapshot.archived_bytes.checked_add(snapshot.end - snapshot.first)
+    snapshot
+        .archived_bytes
+        .checked_add(snapshot.end - snapshot.first)
         .ok_or_else(|| invalid("Journal storage size overflow"))
 }
 
@@ -129,7 +133,9 @@ pub fn request_finalization(directory: &Path) -> io::Result<()> {
 
 fn finalization_requested(directory: &Path) -> io::Result<bool> {
     match fs::symlink_metadata(directory.join("finalize.request")) {
-        Ok(metadata) if metadata.is_file() && metadata.permissions().mode() & 0o077 == 0 => Ok(true),
+        Ok(metadata) if metadata.is_file() && metadata.permissions().mode() & 0o077 == 0 => {
+            Ok(true)
+        }
         Ok(_) => Err(invalid("Invalid recorder finalization request")),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
@@ -141,15 +147,24 @@ fn drain_input(recorder: &mut Recorder, input: &mut impl Read) -> io::Result<()>
     loop {
         let count = match input.read(&mut buffer) {
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            Err(error) if matches!(error.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
                 // The request is issued only after tmux has drained the dead
                 // pane. Consume every pending socket byte before acknowledging it.
-                if finalization_requested(&recorder.directory)? { return Ok(()); }
+                if finalization_requested(&recorder.directory)? {
+                    return Ok(());
+                }
                 continue;
             }
             result => result?,
         };
-        if count == 0 { return Ok(()); }
+        if count == 0 {
+            return Ok(());
+        }
         recorder.append(&buffer[..count])?;
     }
 }
@@ -162,8 +177,12 @@ impl Recorder {
     }
 
     pub fn create_with_policy(directory: &Path, policy: RetentionPolicy) -> io::Result<Self> {
-        Self::with_configuration(directory, SEGMENT_BYTES, RETAINED_SEGMENTS,
-            policy == RetentionPolicy::UntilWorkspaceDeleted)
+        Self::with_configuration(
+            directory,
+            SEGMENT_BYTES,
+            RETAINED_SEGMENTS,
+            policy == RetentionPolicy::UntilWorkspaceDeleted,
+        )
     }
 
     #[cfg(test)]
@@ -171,7 +190,12 @@ impl Recorder {
         Self::with_configuration(directory, segment_bytes, retained, false)
     }
 
-    fn with_configuration(directory: &Path, segment_bytes: u64, retained: u64, archive: bool) -> io::Result<Self> {
+    fn with_configuration(
+        directory: &Path,
+        segment_bytes: u64,
+        retained: u64,
+        archive: bool,
+    ) -> io::Result<Self> {
         if segment_bytes == 0
             || segment_bytes > SEGMENT_BYTES
             || retained == 0
@@ -227,7 +251,8 @@ impl Recorder {
             let mut archived_bytes = self.manifest.archived_bytes;
             if self.manifest.archive {
                 for old in (previous_first / size)..(first / size) {
-                    archived_bytes = archived_bytes.checked_add(archive_segment(&self.directory, old, size)?)
+                    archived_bytes = archived_bytes
+                        .checked_add(archive_segment(&self.directory, old, size)?)
                         .ok_or_else(|| invalid("Journal storage size overflow"))?;
                 }
             }
@@ -254,14 +279,20 @@ impl Recorder {
         write!(
             file,
             "{} {} {} {} {} {}",
-            if self.manifest.archive { "EWJ2" } else { "EWJ1" },
+            if self.manifest.archive {
+                "EWJ2"
+            } else {
+                "EWJ1"
+            },
             self.manifest.segment_bytes,
             self.manifest.retained_segments,
             self.manifest.first,
             self.manifest.end,
             u8::from(self.manifest.closed)
         )?;
-        if self.manifest.archive { write!(file, " {}", self.manifest.archived_bytes)?; }
+        if self.manifest.archive {
+            write!(file, " {}", self.manifest.archived_bytes)?;
+        }
         writeln!(file)?;
         file.sync_all()?;
         fs::rename(pending, self.directory.join("manifest"))?;
@@ -357,8 +388,9 @@ pub fn read(directory: &Path, cursor: u64, limit: usize) -> io::Result<OutputPag
                 Err(error) if error.kind() == io::ErrorKind::NotFound && snapshot.archive => {
                     match read_archive(directory, index, snapshot.segment_bytes) {
                         Ok(archived) => {
-                            bytes[copied..copied + count]
-                                .copy_from_slice(&archived[offset as usize..offset as usize + count]);
+                            bytes[copied..copied + count].copy_from_slice(
+                                &archived[offset as usize..offset as usize + count],
+                            );
                             copied += count;
                             continue;
                         }
@@ -409,18 +441,25 @@ pub fn run_recorder_if_requested() -> Option<io::Result<()>> {
         let directory = PathBuf::from(args.next().ok_or_else(|| invalid("Missing journal path"))?);
         let policy = match args.next().as_deref() {
             None => RetentionPolicy::UntilWorkspaceDeleted,
-            Some(value) if value == std::ffi::OsStr::new("--bounded-history") => RetentionPolicy::Rolling,
+            Some(value) if value == std::ffi::OsStr::new("--bounded-history") => {
+                RetentionPolicy::Rolling
+            }
             Some(_) => return Err(invalid("Unknown journal retention policy")),
         };
         if args.next().is_some() || !directory.is_absolute() {
-            return Err(invalid("Expected an absolute journal path and optional retention policy"));
+            return Err(invalid(
+                "Expected an absolute journal path and optional retention policy",
+            ));
         }
         let mut recorder = Recorder::create_with_policy(&directory, policy)?;
         let stdin = io::stdin();
         // tmux pipe-pane supplies a Unix socket. Ordinary redirected stdin is
         // also supported, with clean EOF as its completion signal.
         let socket = UnixStream::from(stdin.as_fd().try_clone_to_owned()?);
-        let mut input: Box<dyn Read> = if socket.set_read_timeout(Some(Duration::from_millis(100))).is_ok() {
+        let mut input: Box<dyn Read> = if socket
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .is_ok()
+        {
             Box::new(socket)
         } else {
             Box::new(stdin.lock())

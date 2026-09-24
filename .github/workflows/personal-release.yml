@@ -39,7 +39,7 @@ jobs:
       source_ref: ${{ github.sha }}
       version: ${{ inputs.version }}
   publish:
-    needs: build
+    needs: [build, remote-build]
     runs-on: macos-15
     timeout-minutes: 60
     permissions:
@@ -53,7 +53,7 @@ jobs:
           lfs: true
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
-          pattern: personal-macos-*
+          pattern: personal-*
           merge-multiple: true
           path: dist
       - name: Preserve corresponding dependency sources
@@ -72,4 +72,10 @@ jobs:
         run: |
           gh release create "personal-v$VERSION" --repo "$GH_REPO" \
             --target "$SOURCE_COMMIT" --draft --title "Warp Custom $VERSION" \
-            --notes-file dist/RELEASE_NOTES.md dist/*.zip dist/*-source.tar.gz dist/SHA256SUMS dist/homebrew.json
+            --notes-file dist/RELEASE_NOTES.md dist/*.zip dist/*-source.tar.gz dist/*-remote-*.tar.gz dist/SHA256SUMS dist/homebrew.json
+  remote-build:
+    needs: validate
+    uses: ./.github/workflows/personal-remote-build.yml
+    with:
+      source_ref: ${{ github.sha }}
+      version: ${{ inputs.version }}

@@ -9,7 +9,9 @@ pub mod persistent_workspace;
 
 #[allow(dead_code)]
 fn main() -> std::io::Result<()> {
-    if let Some(result) = persistent_shell::run_shell_if_requested() { return result; }
+    if let Some(result) = persistent_shell::run_shell_if_requested() {
+        return result;
+    }
     persistent_journal::run_recorder_if_requested()
         .expect("This executable only runs the production journal recorder")
 }

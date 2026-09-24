@@ -55,10 +55,16 @@ fn retention_is_only_accepted_for_initialized_creation() {
     for (operation, policy, bootstrap) in [
         (Op::List, 0, None),
         (Op::Create, 1, None),
-        (Op::Create, 99, Some(crate::proto::PersistentShellBootstrap::default())),
+        (
+            Op::Create,
+            99,
+            Some(crate::proto::PersistentShellBootstrap::default()),
+        ),
     ] {
         let response = handle(PersistentWorkspaceRequest {
-            history_retention: Some(policy), bootstrap, ..request(operation)
+            history_retention: Some(policy),
+            bootstrap,
+            ..request(operation)
         });
         assert_eq!(response.error.unwrap().code, "invalid_request");
     }

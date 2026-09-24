@@ -14,10 +14,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const PREFIX: &str = "ew-";
-#[path = "persistent_workspace_transport.rs"]
-mod transport;
 #[path = "persistent_workspace_startup.rs"]
 mod startup;
+#[path = "persistent_workspace_transport.rs"]
+mod transport;
 pub use startup::BootstrapProfile;
 const MAX_OUTPUT: u64 = 1024 * 1024;
 const FORMAT: &str = "#{session_name}|#{WARP_WORKSPACE_GENERATION}|#{session_id}|#{window_id}|#{pane_id}|#{pane_pid}|#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}";
@@ -141,7 +141,13 @@ impl Backend {
         self.create_with_startup(id, directory, None, None)
     }
 
-    fn create_with_startup(&self, id: &str, directory: Option<&Path>, generation: Option<&str>, command: Option<&str>) -> Result<Workspace, Error> {
+    fn create_with_startup(
+        &self,
+        id: &str,
+        directory: Option<&Path>,
+        generation: Option<&str>,
+        command: Option<&str>,
+    ) -> Result<Workspace, Error> {
         validate_token(id)?;
         if directory
             .is_some_and(|path| !path.is_absolute() || !path.is_dir() || path.to_str().is_none())
@@ -159,7 +165,10 @@ impl Backend {
         self.probe()?;
         let name = format!("{PREFIX}{id}");
         let generation = match generation {
-            Some(generation) => { validate_token(generation)?; generation.to_owned() },
+            Some(generation) => {
+                validate_token(generation)?;
+                generation.to_owned()
+            }
             None => random_token()?,
         };
         let generation = format!("WARP_WORKSPACE_GENERATION={generation}");
@@ -178,7 +187,9 @@ impl Backend {
         if let Some(path) = directory {
             args.extend(["-c", path.to_str().unwrap()]);
         }
-        if let Some(command) = command { args.push(command); }
+        if let Some(command) = command {
+            args.push(command);
+        }
         // The environment and shell are created in one tmux operation. A retry can
         // never observe a workspace awaiting a second metadata-initialization command.
         match self.run(&args) {
@@ -259,7 +270,11 @@ impl Backend {
         self.lookup_with_status_refresh(id, true)
     }
 
-    fn lookup_with_status_refresh(&self, id: &str, refresh_status: bool) -> Result<Workspace, Error> {
+    fn lookup_with_status_refresh(
+        &self,
+        id: &str,
+        refresh_status: bool,
+    ) -> Result<Workspace, Error> {
         validate_token(id)?;
         let target = format!("={PREFIX}{id}:0.0");
         let output = self.run(&["display-message", "-p", "-t", &target, FORMAT])?;
@@ -299,9 +314,16 @@ impl Backend {
         }
         // A dead PTY can precede waitpid. Absence is unknown, not success.
         let exit_code = if exited && !fields[7].is_empty() {
-            Some(fields[7].parse::<i32>().ok().filter(|code| (0..=255).contains(code))
-                .ok_or_else(|| Error::new(ErrorKind::Failed, "Invalid shell exit status"))?)
-        } else { None };
+            Some(
+                fields[7]
+                    .parse::<i32>()
+                    .ok()
+                    .filter(|code| (0..=255).contains(code))
+                    .ok_or_else(|| Error::new(ErrorKind::Failed, "Invalid shell exit status"))?,
+            )
+        } else {
+            None
+        };
         Ok(Workspace {
             id: id.to_owned(),
             generation: fields[1].to_owned(),
@@ -347,7 +369,10 @@ impl Backend {
                     Ok(0) => return Ok(()),
                     Ok(count) => {
                         if bytes.len() as u64 + count as u64 > MAX_OUTPUT {
-                            return Err(Error::new(ErrorKind::Failed, "tmux output exceeded the safety limit"));
+                            return Err(Error::new(
+                                ErrorKind::Failed,
+                                "tmux output exceeded the safety limit",
+                            ));
                         }
                         bytes.extend_from_slice(&buffer[..count]);
                     }
@@ -369,7 +394,10 @@ impl Backend {
                     return Ok(status);
                 }
                 if Instant::now() >= deadline {
-                    return Err(Error::new(ErrorKind::Timeout, "tmux did not respond within the command deadline"));
+                    return Err(Error::new(
+                        ErrorKind::Timeout,
+                        "tmux did not respond within the command deadline",
+                    ));
                 }
                 thread::sleep(Duration::from_millis(10));
             }

@@ -2480,10 +2480,8 @@ impl TerminalModel {
     }
 
     fn apply_preexec(&mut self, data: PreexecValue) {
-        self.block_list.apply_preexec_with_command_fallback(
-            data,
-            self.persistent_workspace_mode,
-        );
+        self.block_list
+            .apply_preexec_with_command_fallback(data, self.persistent_workspace_mode);
         self.emit_handler_event(HandlerEvent::Preexec);
     }
 

@@ -12,7 +12,8 @@
 # startup, so a slightly newer resources tree underneath it is accepted.
 #
 # Placeholders (substituted at runtime by setup.rs):
-#   {download_base_url}         — e.g. https://app.warp.dev/download/cli
+#   {artifact_url}              — version-pinned artifact URL, with shell OS/arch variables
+#   {artifact_binary_pattern}   — exact custom binary name, or upstream oz glob
 #   {channel}                   — stable | preview | dev
 #   {install_dir}               — e.g. ~/.warp/remote-server
 #   {binary_name}               — e.g. oz | oz-dev | oz-preview
@@ -76,7 +77,7 @@ if [ -n "$staging_tarball_path" ]; then
   mv "$staging_tarball_path" "$tmpdir/oz.tar.gz"
 else
   # Normal path: download via curl or wget.
-  url="{download_base_url}?package=tar&os=$os_name&arch=$arch_name&channel={channel}{version_query}"
+  url="{artifact_url}"
 
   if command -v curl >/dev/null 2>&1; then
     curl -fSL --connect-timeout 15 "$url" -o "$tmpdir/oz.tar.gz"
@@ -93,7 +94,7 @@ tar -xzf "$tmpdir/oz.tar.gz" -C "$tmpdir"
 # The executable and its resources are siblings in the artifact. Exclude the
 # resources tree from the search: bundled skills may ship companion files
 # whose names also start with `oz`.
-bin=$(find "$tmpdir" -type f -name 'oz*' ! -name '*.tar.gz' ! -path '*/resources/*' | head -n1)
+bin=$(find "$tmpdir" -type f -name '{artifact_binary_pattern}' ! -name '*.tar.gz' ! -path '*/resources/*' | head -n1)
 if [ -z "$bin" ]; then echo "no binary found in tarball" >&2; exit 1; fi
 chmod +x "$bin"
 

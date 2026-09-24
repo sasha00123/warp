@@ -42,8 +42,7 @@ class ReleaseValidation(unittest.TestCase):
         git("add", "distribution", "Cargo.lock")
         git("commit", "-m", "Source fixture")
         self.commit = git("rev-parse", "HEAD")
-        for arch in ("arm64", "x86_64"):
-            path = self.root / f"dist/manifest-{arch}.json"
+        for path in (self.root / "dist").glob("manifest-*.json"):
             data = json.loads(path.read_text()); data["commit"] = self.commit
             path.write_text(json.dumps(data))
         vendor = self.root / "target/personal-dependency-sources/example"
@@ -72,6 +71,46 @@ class ReleaseValidation(unittest.TestCase):
         self.prepare_source()
         (self.root / "Cargo.lock").write_text("changed source")
         with self.assertRaises(subprocess.CalledProcessError):
+            release.assemble("1.2.3", self.commit)
+
+    def enable_remote(self):
+        self.config["remote_platforms"] = ["linux-x86_64"]
+        (self.root / "distribution/config.json").write_text(json.dumps(self.config))
+        name = "zed-custom-1.2.3-remote-linux-x86_64.tar.gz"
+        (self.root / "dist" / name).write_bytes(b"test remote")
+        manifest = {"version": "1.2.3", "commit": self.commit, "os": "linux",
+                    "architecture": "x86_64", "asset": name, "repository": self.config["repository"],
+                    "sha256": hashlib.sha256(b"test remote").hexdigest()}
+        (self.root / "dist/manifest-remote-linux-x86_64.json").write_text(json.dumps(manifest))
+
+    def test_includes_matching_remote_artifact_and_checksum(self):
+        self.enable_remote()
+        self.prepare_source()
+        release.assemble("1.2.3", self.commit)
+        manifest = json.loads((self.root / "dist/homebrew.json").read_text())
+        self.assertEqual(len(manifest["remote_assets"]), 1)
+        self.assertEqual(manifest["remote_assets"][0]["commit"], self.commit)
+        self.assertIn("remote-linux-x86_64.tar.gz", (self.root / "dist/SHA256SUMS").read_text())
+
+    def test_refuses_missing_required_remote_artifact(self):
+        self.enable_remote()
+        (self.root / "dist/manifest-remote-linux-x86_64.json").unlink()
+        with self.assertRaises(FileNotFoundError):
+            release.assemble("1.2.3", self.commit)
+
+    def test_refuses_changed_remote_artifact(self):
+        self.enable_remote()
+        (self.root / "dist/zed-custom-1.2.3-remote-linux-x86_64.tar.gz").write_bytes(b"wrong")
+        with self.assertRaisesRegex(ValueError, "remote artifact checksum"):
+            release.assemble("1.2.3", self.commit)
+
+    def test_refuses_remote_from_different_commit(self):
+        self.enable_remote()
+        path = self.root / "dist/manifest-remote-linux-x86_64.json"
+        manifest = json.loads(path.read_text())
+        manifest["commit"] = "b" * 40
+        path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(ValueError, "remote artifact provenance"):
             release.assemble("1.2.3", self.commit)
 
     def test_refuses_missing_architecture(self):

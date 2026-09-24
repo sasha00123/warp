@@ -6,7 +6,9 @@
   "upstream_branch": "master",
   "executable": "warp-oss",
   "license": "AGPL-3.0",
-  "base": "7ffccbb8",
+  "base": "2120e3794710027577f731e4b8ce4814405f3c53",
   "repository": "sasha00123/warp",
-  "minimum_macos": "13.0"
+  "minimum_macos": "13.0",
+  "macos_architectures": ["arm64"],
+  "remote_platforms": ["linux-aarch64", "linux-x86_64"]
 }

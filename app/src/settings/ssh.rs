@@ -1,8 +1,18 @@
 use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 
-#[derive(Default, Debug, serde::Serialize, serde::Deserialize, PartialEq, Copy, Clone,
-    strum_macros::EnumIter, schemars::JsonSchema, settings_value::SettingsValue)]
+#[derive(
+    Default,
+    Debug,
+    serde::Serialize,
+    serde::Deserialize,
+    PartialEq,
+    Copy,
+    Clone,
+    strum_macros::EnumIter,
+    schemars::JsonSchema,
+    settings_value::SettingsValue,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum PersistentHistoryRetention {
     #[default]
@@ -20,7 +30,9 @@ impl PersistentHistoryRetention {
 
     pub fn to_proto(self) -> remote_server::proto::PersistentHistoryRetention {
         match self {
-            Self::UntilWorkspaceDeleted => remote_server::proto::PersistentHistoryRetention::UntilWorkspaceDeleted,
+            Self::UntilWorkspaceDeleted => {
+                remote_server::proto::PersistentHistoryRetention::UntilWorkspaceDeleted
+            }
             Self::Rolling => remote_server::proto::PersistentHistoryRetention::Rolling,
         }
     }

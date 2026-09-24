@@ -23,12 +23,21 @@ impl Backend {
         executable: &Path,
         root: &Path,
     ) -> Result<(), Error> {
-        self.start_recording_with_retention(id, generation, executable, root,
-            persistent_journal::RetentionPolicy::default())
+        self.start_recording_with_retention(
+            id,
+            generation,
+            executable,
+            root,
+            persistent_journal::RetentionPolicy::default(),
+        )
     }
 
     pub fn start_recording_with_retention(
-        &self, id: &str, generation: &str, executable: &Path, root: &Path,
+        &self,
+        id: &str,
+        generation: &str,
+        executable: &Path,
+        root: &Path,
         retention: persistent_journal::RetentionPolicy,
     ) -> Result<(), Error> {
         let workspace = self.resolve(id, generation)?;
@@ -109,24 +118,47 @@ impl Backend {
         }
     }
 
-    pub fn delete_retained_history(&self, id: &str, generation: &str, root: &Path) -> Result<(), Error> {
+    pub fn delete_retained_history(
+        &self,
+        id: &str,
+        generation: &str,
+        root: &Path,
+    ) -> Result<(), Error> {
         let journal = self.journal_path(id, generation, root)?;
         match self.resolve(id, generation) {
-            Ok(_) => return Err(Error::new(ErrorKind::Failed, "Terminate the workspace before deleting its history")),
-            Err(error) if matches!(error.kind, ErrorKind::NotFound | ErrorKind::Stale) => {},
+            Ok(_) => {
+                return Err(Error::new(
+                    ErrorKind::Failed,
+                    "Terminate the workspace before deleting its history",
+                ));
+            }
+            Err(error) if matches!(error.kind, ErrorKind::NotFound | ErrorKind::Stale) => {}
             Err(error) => return Err(error),
         }
         match fs::symlink_metadata(root) {
-            Ok(metadata) if metadata.is_dir() && metadata.permissions().mode() & 0o077 == 0 => {},
+            Ok(metadata) if metadata.is_dir() && metadata.permissions().mode() & 0o077 == 0 => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Ok(_) => return Err(Error::new(ErrorKind::Failed, "History root must be a private directory")),
+            Ok(_) => {
+                return Err(Error::new(
+                    ErrorKind::Failed,
+                    "History root must be a private directory",
+                ));
+            }
             Err(error) => return Err(io_error(error)),
         }
-        for path in [journal, crate::persistent_shell::startup_path(root, id, generation)] {
+        for path in [
+            journal,
+            crate::persistent_shell::startup_path(root, id, generation),
+        ] {
             match fs::symlink_metadata(&path) {
                 Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(&path).map_err(io_error)?,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
-                Ok(_) => return Err(Error::new(ErrorKind::Failed, "Refusing to follow a history symlink")),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Ok(_) => {
+                    return Err(Error::new(
+                        ErrorKind::Failed,
+                        "Refusing to follow a history symlink",
+                    ));
+                }
                 Err(error) => return Err(io_error(error)),
             }
         }
@@ -142,16 +174,20 @@ impl Backend {
     ) -> Result<OutputPage, Error> {
         let workspace = self.resolve(id, generation)?;
         let path = self.journal_path(id, generation, root)?;
-        let read = || persistent_journal::read(&path, cursor, persistent_journal::MAX_PAGE_BYTES)
-            .map_err(io_error);
+        let read = || {
+            persistent_journal::read(&path, cursor, persistent_journal::MAX_PAGE_BYTES)
+                .map_err(io_error)
+        };
         let mut page = read()?;
         if workspace.exited && !page.closed {
             persistent_journal::request_finalization(&path).map_err(io_error)?;
             let deadline = Instant::now() + Duration::from_secs(2);
             while !page.closed {
                 if Instant::now() >= deadline {
-                    return Err(Error::new(ErrorKind::Failed,
-                        "Shell exited, but its output recorder did not finalize; output may be incomplete"));
+                    return Err(Error::new(
+                        ErrorKind::Failed,
+                        "Shell exited, but its output recorder did not finalize; output may be incomplete",
+                    ));
                 }
                 thread::sleep(Duration::from_millis(10));
                 page = read()?;

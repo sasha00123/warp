@@ -2,6 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 version="$1"
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { printf 'Expected numeric major.minor.patch\n' >&2; exit 1; }
+export WARP_CUSTOM_RELEASE_VERSION="$version"
+export GIT_RELEASE_TAG="personal-v$version"
 export CARGO_ABOUT_CONFIG="$PWD/distribution/about.toml"
 export CARGO_ABOUT_FAIL=1
 export PATH="$PWD/target/personal-tools/bin:$PATH"

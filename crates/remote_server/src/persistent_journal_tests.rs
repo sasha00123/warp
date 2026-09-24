@@ -23,7 +23,10 @@ struct IntermittentInput(std::collections::VecDeque<io::Result<Vec<u8>>>);
 
 impl Read for IntermittentInput {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        let bytes = self.0.pop_front().expect("Unexpected additional recorder read")?;
+        let bytes = self
+            .0
+            .pop_front()
+            .expect("Unexpected additional recorder read")?;
         buffer[..bytes.len()].copy_from_slice(&bytes);
         Ok(bytes.len())
     }
@@ -35,34 +38,50 @@ fn finalization_drains_pending_bytes_before_closing() {
     let mut recorder = Recorder::create(&lab.0).unwrap();
     request_finalization(&lab.0).unwrap();
     request_finalization(&lab.0).unwrap();
-    let mut input = IntermittentInput([
-        Ok(b"first\r\n".to_vec()),
-        Err(io::ErrorKind::Interrupted.into()),
-        Ok(b"last\xff\x00".to_vec()),
-        Err(io::ErrorKind::WouldBlock.into()),
-    ].into());
+    let mut input = IntermittentInput(
+        [
+            Ok(b"first\r\n".to_vec()),
+            Err(io::ErrorKind::Interrupted.into()),
+            Ok(b"last\xff\x00".to_vec()),
+            Err(io::ErrorKind::WouldBlock.into()),
+        ]
+        .into(),
+    );
     drain_input(&mut recorder, &mut input).unwrap();
     assert!(!read(&lab.0, 0, MAX_PAGE_BYTES).unwrap().closed);
     recorder.close().unwrap();
     let page = read(&lab.0, 0, MAX_PAGE_BYTES).unwrap();
     assert!(page.closed);
     assert_eq!(page.bytes, b"first\r\nlast\xff\x00");
-    assert_eq!(fs::metadata(lab.0.join("finalize.request")).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        fs::metadata(lab.0.join("finalize.request"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
 }
 
 #[test]
 fn quiet_socket_is_not_mistaken_for_shell_exit() {
     let lab = Lab::new();
     let mut recorder = Recorder::create(&lab.0).unwrap();
-    let mut input = IntermittentInput([
-        Err(io::ErrorKind::TimedOut.into()),
-        Err(io::ErrorKind::WouldBlock.into()),
-        Ok(b"still running".to_vec()),
-        Ok(Vec::new()),
-    ].into());
+    let mut input = IntermittentInput(
+        [
+            Err(io::ErrorKind::TimedOut.into()),
+            Err(io::ErrorKind::WouldBlock.into()),
+            Ok(b"still running".to_vec()),
+            Ok(Vec::new()),
+        ]
+        .into(),
+    );
     drain_input(&mut recorder, &mut input).unwrap();
     recorder.close().unwrap();
-    assert_eq!(read(&lab.0, 0, MAX_PAGE_BYTES).unwrap().bytes, b"still running");
+    assert_eq!(
+        read(&lab.0, 0, MAX_PAGE_BYTES).unwrap().bytes,
+        b"still running"
+    );
 }
 
 #[test]
@@ -225,7 +244,14 @@ fn compressed_history_preserves_every_byte_after_hot_retention_expires() {
     recorder.close().unwrap();
     assert!(!segment_path(&lab.0, 0).exists());
     assert!(archive_path(&lab.0, 0).is_file());
-    assert_eq!(fs::metadata(archive_path(&lab.0, 0)).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(
+        fs::metadata(archive_path(&lab.0, 0))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
     let mut actual = Vec::new();
     let mut cursor = 0;
     while cursor < expected.len() as u64 {
@@ -237,9 +263,12 @@ fn compressed_history_preserves_every_byte_after_hot_retention_expires() {
         actual.extend(page.bytes);
     }
     assert_eq!(actual, expected);
-    let actual_storage: u64 = fs::read_dir(&lab.0).unwrap().map(|entry| entry.unwrap())
+    let actual_storage: u64 = fs::read_dir(&lab.0)
+        .unwrap()
+        .map(|entry| entry.unwrap())
         .filter(|entry| entry.file_name().to_string_lossy().contains(".output"))
-        .map(|entry| entry.metadata().unwrap().len()).sum();
+        .map(|entry| entry.metadata().unwrap().len())
+        .sum();
     assert_eq!(retained_storage_bytes(&lab.0).unwrap(), actual_storage);
 }
 
@@ -264,15 +293,24 @@ fn compressed_history_rejects_corruption_and_excessive_expansion() {
 
 #[test]
 fn default_retention_archives_but_rolling_policy_remains_readable() {
-    for policy in [RetentionPolicy::UntilWorkspaceDeleted, RetentionPolicy::Rolling] {
+    for policy in [
+        RetentionPolicy::UntilWorkspaceDeleted,
+        RetentionPolicy::Rolling,
+    ] {
         let lab = Lab::new();
         let mut recorder = Recorder::create_with_policy(&lab.0, policy).unwrap();
         recorder.append(b"retained").unwrap();
         recorder.close().unwrap();
-        assert_eq!(manifest(&lab.0).unwrap().archive, policy == RetentionPolicy::UntilWorkspaceDeleted);
+        assert_eq!(
+            manifest(&lab.0).unwrap().archive,
+            policy == RetentionPolicy::UntilWorkspaceDeleted
+        );
         assert_eq!(read(&lab.0, 0, MAX_PAGE_BYTES).unwrap().bytes, b"retained");
     }
-    assert_eq!(RetentionPolicy::default(), RetentionPolicy::UntilWorkspaceDeleted);
+    assert_eq!(
+        RetentionPolicy::default(),
+        RetentionPolicy::UntilWorkspaceDeleted
+    );
 }
 
 #[test]
@@ -290,11 +328,15 @@ fn readers_cross_hot_to_compressed_rotation_without_a_gap() {
                     assert_eq!(*byte, ((cursor + offset as u64) % 251) as u8);
                 }
                 cursor = page.next_cursor;
-                if page.closed && cursor == page.high_watermark { return cursor; }
+                if page.closed && cursor == page.high_watermark {
+                    return cursor;
+                }
                 std::thread::yield_now();
             }
         });
-        for index in 0..128u64 { recorder.append(&[(index % 251) as u8]).unwrap(); }
+        for index in 0..128u64 {
+            recorder.append(&[(index % 251) as u8]).unwrap();
+        }
         recorder.close().unwrap();
         assert_eq!(reader.join().unwrap(), 128);
     });

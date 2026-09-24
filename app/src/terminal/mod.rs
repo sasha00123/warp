@@ -55,14 +55,14 @@ mod meta_shortcuts;
 pub mod mock_terminal_manager;
 pub mod model;
 pub mod model_events;
+#[cfg(unix)]
+pub mod persistent_tty;
 pub mod platform;
 pub mod profile_model_selector;
 pub mod prompt;
 pub mod prompt_render_helper;
 pub mod recorder;
 pub mod remote_tty;
-#[cfg(unix)]
-pub mod persistent_tty;
 pub mod resizable_data;
 pub mod rich_history;
 pub mod safe_mode_settings;

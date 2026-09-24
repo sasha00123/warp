@@ -2,6 +2,38 @@
 
 Unofficial build of Warp; not affiliated with its upstream developer.
 
+## Persistent SSH release candidate
+
+The current integration targets Apple Silicon macOS and Linux SSH hosts on both
+ARM64 and x86-64. Linux artifacts are built on Ubuntu 24.04; older distributions
+must provide compatible runtime libraries or build the extension from source.
+tmux 3.2 or newer is supported, with capability fallbacks for older tmux releases.
+The local test matrix includes tmux 3.4 and 3.7c. See
+`docs/persistent-workspaces.md` for retention, reconnect, recovery and deletion
+semantics. No additional remote listening port is used.
+
+Every custom GUI release embeds `WARP_CUSTOM_RELEASE_VERSION` and downloads its
+matching extension from the same immutable GitHub release, never the upstream
+dogfood channel. Installs use `~/.warp-custom/remote-server/warp-oss-VERSION`.
+The native picker is enabled only after the extension advertises the required
+management, terminal transport and native-block replay capabilities.
+
+Build Linux artifacts in their respective native/emulated Linux build VMs:
+
+```sh
+bash distribution/setup-linux.sh
+bash distribution/build-remote.sh 0.0.12
+```
+
+All three binary artifacts must have the same source commit. Release assembly
+checks the required architecture matrix, source revision and archive checksums;
+missing or mismatched remote extensions prevent publication. The GitHub workflow
+produces drafts only. Local VM acceptance must pass on the exact packaged bytes
+before a draft is made public. Signing remains ad-hoc, not notarized.
+
+Unversioned developer builds are locally deployed. Their intentionally absent
+`personal-vunversioned` release does not fall back to incompatible upstream code.
+
 ## Branches and feature PRs
 
 - `main` is an exact, fast-forward-only mirror of `warpdotdev/warp/master`.

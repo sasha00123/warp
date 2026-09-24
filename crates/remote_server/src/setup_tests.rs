@@ -9,6 +9,32 @@ use command::blocking::Command;
 use super::*;
 
 #[test]
+fn custom_extension_artifact_is_pinned_to_our_release() {
+    for (os, arch) in [
+        ("linux", "aarch64"),
+        ("linux", "x86_64"),
+        ("macos", "aarch64"),
+    ] {
+        let url = custom_artifact_url("0.0.12", os, arch);
+        assert_eq!(
+            url,
+            format!(
+                "https://github.com/sasha00123/warp/releases/download/personal-v0.0.12/warp-custom-0.0.12-remote-{os}-{arch}.tar.gz"
+            )
+        );
+        assert!(!url.contains("app.warp.dev"));
+        assert!(!url.contains("latest"));
+    }
+}
+
+#[test]
+fn installer_url_and_binary_placeholders_are_fully_substituted() {
+    let script = install_script(None);
+    assert!(!script.contains("{artifact_url}"));
+    assert!(!script.contains("{artifact_binary_pattern}"));
+}
+
+#[test]
 fn parse_uname_linux_x86_64() {
     let platform = parse_uname_output("Linux x86_64").unwrap();
     assert_eq!(platform.os, RemoteOs::Linux);
@@ -301,7 +327,7 @@ fn make_test_tarball(
     let tarball = test_root.join(format!("{tarball_name}.tar.gz"));
     fs::create_dir_all(&resources).unwrap();
     fs::write(
-        tar_source.join("oz-test"),
+        tar_source.join(binary_name()),
         "#!/usr/bin/env bash\n[ \"$1\" = \"--version\" ]\n",
     )
     .unwrap();
@@ -321,7 +347,7 @@ fn make_test_tarball(
         .arg(&tarball)
         .arg("-C")
         .arg(&tar_source)
-        .arg("oz-test")
+        .arg(binary_name())
         .arg("resources")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -428,7 +454,7 @@ fn install_script_tolerates_tarball_without_resources() {
     fs::create_dir_all(&fake_home).unwrap();
     fs::create_dir_all(&tar_source).unwrap();
     fs::write(
-        tar_source.join("oz-test"),
+        tar_source.join(binary_name()),
         "#!/usr/bin/env bash\n[ \"$1\" = \"--version\" ]\n",
     )
     .unwrap();
@@ -438,7 +464,7 @@ fn install_script_tolerates_tarball_without_resources() {
         .arg(&tarball)
         .arg("-C")
         .arg(&tar_source)
-        .arg("oz-test")
+        .arg(binary_name())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()

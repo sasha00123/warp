@@ -17,6 +17,7 @@ pub fn profile_for_shell(shell_type: ShellType) -> Result<PersistentShellBootstr
     Ok(PersistentShellBootstrap {
         shell: shell.into(),
         init_script: crate::ASSETS.get(init_path)?.to_vec(),
-        bootstrap_script: crate::terminal::bootstrap::script_for_shell(shell_type, &crate::ASSETS).into_owned(),
+        bootstrap_script: crate::terminal::bootstrap::script_for_shell(shell_type, &crate::ASSETS)
+            .into_owned(),
     })
 }

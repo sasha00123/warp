@@ -2488,7 +2488,10 @@ impl GridHandler {
             let cells_to_copy = if other.row_wraps(row_idx) {
                 other.columns()
             } else {
-                row[..].iter().rposition(|cell| !cell.is_empty()).map_or(0, |col| col + 1)
+                row[..]
+                    .iter()
+                    .rposition(|cell| !cell.is_empty())
+                    .map_or(0, |col| col + 1)
             };
             for col in 0..cells_to_copy {
                 // Move cursor to next line, if needed (in combined grid).

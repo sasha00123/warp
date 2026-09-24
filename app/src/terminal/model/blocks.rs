@@ -3417,7 +3417,9 @@ impl BlockList {
         // styled/aliased command remains untouched. Do this before Preexec
         // emits AfterBlockStarted so subscribers see the recovered command.
         if recover_missing_command
-            && self.active_block().command_should_show_as_empty_when_finished()
+            && self
+                .active_block()
+                .command_should_show_as_empty_when_finished()
         {
             // Shell hooks contain logical newlines, while the command grid
             // consumes terminal bytes. LF alone preserves the previous column.

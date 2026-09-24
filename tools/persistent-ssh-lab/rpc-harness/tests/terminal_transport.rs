@@ -144,12 +144,16 @@ fn raw_output_offline_job_reconnect_interrupt_stdin_resize_and_exit() {
         .backend
         .resolve(&workspace.id, &workspace.generation)
         .unwrap()
-        .exit_code.is_none()
+        .exit_code
+        .is_none()
     {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(25));
     }
-    let exited = lab.backend.resolve(&workspace.id, &workspace.generation).unwrap();
+    let exited = lab
+        .backend
+        .resolve(&workspace.id, &workspace.generation)
+        .unwrap();
     assert!(exited.exited);
     assert_eq!(exited.exit_code, Some(7));
     assert!(
@@ -168,31 +172,56 @@ fn shell_exit_flushes_all_trailing_output_before_journal_completion() {
     let workspace = lab.create(3);
     // Interactive shells may echo a submitted command even after stty -echo.
     // Keep the output marker absent from that command's literal text.
-    lab.input(&workspace, b"awk 'BEGIN { for (i=0; i<60000; i++) printf \"TRAIL%s%06d\\n\", \":\", i }'; exit 7\r");
+    lab.input(
+        &workspace,
+        b"awk 'BEGIN { for (i=0; i<60000; i++) printf \"TRAIL%s%06d\\n\", \":\", i }'; exit 7\r",
+    );
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut cursor = 0;
     let mut output = Vec::new();
     let mut pages = 0;
     loop {
-        let page = lab.backend.read_output(&workspace.id, &workspace.generation, &lab.root, cursor).unwrap();
+        let page = lab
+            .backend
+            .read_output(&workspace.id, &workspace.generation, &lab.root, cursor)
+            .unwrap();
         assert!(!page.history_gap);
         assert_eq!(page.start_cursor, cursor);
         cursor = page.next_cursor;
         output.extend(page.bytes);
         pages += 1;
-        if page.closed && cursor == page.high_watermark { break; }
-        assert!(Instant::now() < deadline, "Final output was never durably closed");
+        if page.closed && cursor == page.high_watermark {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Final output was never durably closed"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(pages > 1);
     let text = String::from_utf8(output).unwrap();
     assert_eq!(text.matches("TRAIL:").count(), 60000);
-    let expected: String = (0..60000).map(|index| format!("TRAIL:{index:06}\r\n")).collect();
-    assert!(text.contains(&expected), "The final output must contain every line in order, without duplicates or omissions");
-    assert_eq!(lab.backend.resolve(&workspace.id, &workspace.generation).unwrap().exit_code, Some(7));
+    let expected: String = (0..60000)
+        .map(|index| format!("TRAIL:{index:06}\r\n"))
+        .collect();
+    assert!(
+        text.contains(&expected),
+        "The final output must contain every line in order, without duplicates or omissions"
+    );
+    assert_eq!(
+        lab.backend
+            .resolve(&workspace.id, &workspace.generation)
+            .unwrap()
+            .exit_code,
+        Some(7)
+    );
     // Older tmux can retain pane_pipe after the idle recorder has exited.
     // The recorder's final manifest, not that flag, proves output completion.
-    let final_page = lab.backend.read_output(&workspace.id, &workspace.generation, &lab.root, cursor).unwrap();
+    let final_page = lab
+        .backend
+        .read_output(&workspace.id, &workspace.generation, &lab.root, cursor)
+        .unwrap();
     assert!(final_page.closed);
     assert_eq!(final_page.high_watermark, cursor);
     assert!(final_page.bytes.is_empty());

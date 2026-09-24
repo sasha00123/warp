@@ -383,13 +383,22 @@ impl ModelEventDispatcher {
 }
 
 fn replay_has_external_side_effect(event: &Event) -> bool {
-    matches!(event,
-        Event::ClipboardLoad(..) | Event::ClipboardStore(..) | Event::Bell
-        | Event::PluggableNotification { .. } | Event::FinishUpdate(_)
-        | Event::ExternalShellWidgetSelection(_) | Event::PreInteractiveSSHSession
-        | Event::SSH(_) | Event::ExitShell { .. } | Event::SSHControlMasterError
-        | Event::DetectedEndOfSshLogin(_) | Event::InitSubshell(_)
-        | Event::SourcedRcFileInSubshell(_) | Event::HonorPS1OutOfSync
+    matches!(
+        event,
+        Event::ClipboardLoad(..)
+            | Event::ClipboardStore(..)
+            | Event::Bell
+            | Event::PluggableNotification { .. }
+            | Event::FinishUpdate(_)
+            | Event::ExternalShellWidgetSelection(_)
+            | Event::PreInteractiveSSHSession
+            | Event::SSH(_)
+            | Event::ExitShell { .. }
+            | Event::SSHControlMasterError
+            | Event::DetectedEndOfSshLogin(_)
+            | Event::InitSubshell(_)
+            | Event::SourcedRcFileInSubshell(_)
+            | Event::HonorPS1OutOfSync
     )
 }
 
@@ -402,7 +411,9 @@ enum PromptKind {
 /// Set of events that were dispatched from the [`crate::terminal::TerminalModel`] while parsing
 /// PTY output.
 pub enum ModelEvent {
-    PersistentReplayState { replaying: bool },
+    PersistentReplayState {
+        replaying: bool,
+    },
     MouseCursorDirty,
     Title(String),
     VisibleBootstrapBlock,

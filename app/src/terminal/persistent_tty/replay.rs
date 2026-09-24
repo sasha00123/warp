@@ -1,7 +1,7 @@
-use std::sync::Arc;
 use parking_lot::FairMutex;
 use remote_server::persistent_replay::{ReadTicket, ReplayError, ReplayPhase, ReplayState};
 use remote_server::proto::PersistentTerminalOutput;
+use std::sync::Arc;
 
 use crate::terminal::TerminalModel;
 use crate::terminal::event::Event;
@@ -20,16 +20,33 @@ pub struct NativeReplay {
 
 impl NativeReplay {
     pub fn new(model: Arc<FairMutex<TerminalModel>>, events: ChannelEventListener) -> Self {
-        Self { model, events, processor: Processor::new(), state: ReplayState::new(0),
-            historical_events_open: false }
+        Self {
+            model,
+            events,
+            processor: Processor::new(),
+            state: ReplayState::new(0),
+            historical_events_open: false,
+        }
     }
 
-    pub fn connected(&mut self) { self.state.connected(); }
-    pub fn read_ticket(&self) -> Result<ReadTicket, ReplayError> { self.state.read_ticket() }
-    pub fn phase(&self) -> ReplayPhase { self.state.phase() }
-    pub fn cursor(&self) -> u64 { self.state.cursor() }
-    pub fn can_send_input(&self) -> bool { self.state.can_send_input() }
-    pub fn acknowledge_input_uncertainty(&mut self) { self.state.acknowledge_input_uncertainty(); }
+    pub fn connected(&mut self) {
+        self.state.connected();
+    }
+    pub fn read_ticket(&self) -> Result<ReadTicket, ReplayError> {
+        self.state.read_ticket()
+    }
+    pub fn phase(&self) -> ReplayPhase {
+        self.state.phase()
+    }
+    pub fn cursor(&self) -> u64 {
+        self.state.cursor()
+    }
+    pub fn can_send_input(&self) -> bool {
+        self.state.can_send_input()
+    }
+    pub fn acknowledge_input_uncertainty(&mut self) {
+        self.state.acknowledge_input_uncertainty();
+    }
 
     pub fn finish_shell(&self, exit_code: Option<i32>) {
         if let Some(exit_code) = exit_code {
@@ -50,21 +67,32 @@ impl NativeReplay {
 
     /// Returned terminal-query replies are live bytes only. The caller queues
     /// them through the same serialized writer as interactive input.
-    pub fn apply(&mut self, ticket: ReadTicket, page: PersistentTerminalOutput) -> Result<Vec<u8>, ReplayError> {
+    pub fn apply(
+        &mut self,
+        ticket: ReadTicket,
+        page: PersistentTerminalOutput,
+    ) -> Result<Vec<u8>, ReplayError> {
         let batch = self.state.prepare(ticket, page)?;
         let mut replies = Vec::new();
         if batch.historical_bytes > 0 {
             if !self.historical_events_open {
-                self.events.send_app_event(Event::PersistentReplayState { replaying: true });
+                self.events
+                    .send_app_event(Event::PersistentReplayState { replaying: true });
                 self.historical_events_open = true;
             }
-            self.processor.parse_bytes(&mut *self.model.lock(),
-                &batch.bytes[..batch.historical_bytes], &mut std::io::sink());
+            self.processor.parse_bytes(
+                &mut *self.model.lock(),
+                &batch.bytes[..batch.historical_bytes],
+                &mut std::io::sink(),
+            );
         }
         if batch.historical_bytes < batch.bytes.len() {
             self.end_historical_events();
-            self.processor.parse_bytes(&mut *self.model.lock(),
-                &batch.bytes[batch.historical_bytes..], &mut replies);
+            self.processor.parse_bytes(
+                &mut *self.model.lock(),
+                &batch.bytes[batch.historical_bytes..],
+                &mut replies,
+            );
         }
         self.state.commit(batch)?;
         if self.state.phase() != ReplayPhase::Replaying {
@@ -76,7 +104,8 @@ impl NativeReplay {
 
     fn end_historical_events(&mut self) {
         if self.historical_events_open {
-            self.events.send_app_event(Event::PersistentReplayState { replaying: false });
+            self.events
+                .send_app_event(Event::PersistentReplayState { replaying: false });
             self.historical_events_open = false;
         }
     }

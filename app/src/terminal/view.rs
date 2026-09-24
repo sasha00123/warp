@@ -2516,11 +2516,14 @@ struct LocalSessionCanonicalPwdCache {
 
 pub struct TerminalView {
     #[cfg(all(unix, feature = "local_tty"))]
-    pub(crate) persistent_workspace: Option<crate::terminal::persistent_tty::terminal_manager::WorkspaceAttachment>,
+    pub(crate) persistent_workspace:
+        Option<crate::terminal::persistent_tty::terminal_manager::WorkspaceAttachment>,
     #[cfg(all(unix, feature = "local_tty"))]
-    pub(crate) persistent_transport: Option<crate::terminal::persistent_tty::transport::TransportHandle>,
+    pub(crate) persistent_transport:
+        Option<crate::terminal::persistent_tty::transport::TransportHandle>,
     #[cfg(all(unix, feature = "local_tty"))]
-    pub(crate) persistent_status: Option<ViewHandle<crate::terminal::persistent_tty::status_view::StatusView>>,
+    pub(crate) persistent_status:
+        Option<ViewHandle<crate::terminal::persistent_tty::status_view::StatusView>>,
     pub model: Arc<FairMutex<TerminalModel>>,
     view_handle: WeakViewHandle<Self>,
 

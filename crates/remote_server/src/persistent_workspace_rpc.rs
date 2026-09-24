@@ -44,13 +44,18 @@ fn execute(
         .map_err(|_| invalid("Unknown workspace operation"))?;
     use PersistentWorkspaceOperation as Op;
     if operation != Op::Create && request.bootstrap.is_some() {
-        return Err(invalid("Bootstrap assets are valid only on workspace creation"));
+        return Err(invalid(
+            "Bootstrap assets are valid only on workspace creation",
+        ));
     }
     if let Some(policy) = request.history_retention
-        && (operation != Op::Create || request.bootstrap.is_none()
+        && (operation != Op::Create
+            || request.bootstrap.is_none()
             || crate::proto::PersistentHistoryRetention::try_from(policy).is_err())
     {
-        return Err(invalid("History retention requires initialized workspace creation and a known policy"));
+        return Err(invalid(
+            "History retention requires initialized workspace creation and a known policy",
+        ));
     }
     if (operation == Op::Terminal) != request.terminal.is_some() {
         return Err(invalid(
@@ -98,8 +103,13 @@ fn execute(
             .terminate(&request.workspace_id, &request.generation)
             .and_then(|()| {
                 if let Some(home) = std::env::var_os("HOME") {
-                    let root = std::path::PathBuf::from(home).join(".local/state/warp/persistent-output-v1");
-                    backend.delete_retained_history(&request.workspace_id, &request.generation, &root)?;
+                    let root = std::path::PathBuf::from(home)
+                        .join(".local/state/warp/persistent-output-v1");
+                    backend.delete_retained_history(
+                        &request.workspace_id,
+                        &request.generation,
+                        &root,
+                    )?;
                 }
                 Ok(())
             })
@@ -168,7 +178,8 @@ fn terminal(
 
 fn to_proto(workspace: Workspace) -> PersistentWorkspace {
     let history_storage_bytes = std::env::var_os("HOME").and_then(|home| {
-        let journal = std::path::PathBuf::from(home).join(".local/state/warp/persistent-output-v1")
+        let journal = std::path::PathBuf::from(home)
+            .join(".local/state/warp/persistent-output-v1")
             .join(format!("{}-{}", workspace.id, workspace.generation));
         crate::persistent_journal::retained_storage_bytes(&journal).ok()
     });
@@ -176,8 +187,10 @@ fn to_proto(workspace: Workspace) -> PersistentWorkspace {
     let activity = std::env::var_os("HOME").and_then(|home| {
         crate::persistent_shell::activity(
             &std::path::PathBuf::from(home).join(".local/state/warp/persistent-output-v1"),
-            &workspace.id, &workspace.generation,
-        ).map(str::to_owned)
+            &workspace.id,
+            &workspace.generation,
+        )
+        .map(str::to_owned)
     });
     PersistentWorkspace {
         shell,
@@ -204,19 +217,33 @@ fn create_workspace(
     };
     use crate::persistent_workspace::{BootstrapProfile, Error, ErrorKind};
     let executable = std::env::current_exe().map_err(|error| Error {
-        kind: ErrorKind::Failed, message: error.to_string(),
+        kind: ErrorKind::Failed,
+        message: error.to_string(),
     })?;
     let home = std::env::var_os("HOME").ok_or_else(|| Error {
-        kind: ErrorKind::Failed, message: "Remote HOME is not set".into(),
+        kind: ErrorKind::Failed,
+        message: "Remote HOME is not set".into(),
     })?;
     let root = std::path::PathBuf::from(home).join(".local/state/warp/persistent-output-v1");
-    let retention = match request.history_retention.and_then(|value|
-        crate::proto::PersistentHistoryRetention::try_from(value).ok()) {
-        Some(crate::proto::PersistentHistoryRetention::Rolling) => crate::persistent_journal::RetentionPolicy::Rolling,
+    let retention = match request
+        .history_retention
+        .and_then(|value| crate::proto::PersistentHistoryRetention::try_from(value).ok())
+    {
+        Some(crate::proto::PersistentHistoryRetention::Rolling) => {
+            crate::persistent_journal::RetentionPolicy::Rolling
+        }
         _ => crate::persistent_journal::RetentionPolicy::UntilWorkspaceDeleted,
     };
-    backend.create_initialized_with_retention(&request.workspace_id, directory, BootstrapProfile {
-        shell: &profile.shell, init_script: &profile.init_script,
-        bootstrap_script: &profile.bootstrap_script,
-    }, &executable, &root, retention)
+    backend.create_initialized_with_retention(
+        &request.workspace_id,
+        directory,
+        BootstrapProfile {
+            shell: &profile.shell,
+            init_script: &profile.init_script,
+            bootstrap_script: &profile.bootstrap_script,
+        },
+        &executable,
+        &root,
+        retention,
+    )
 }

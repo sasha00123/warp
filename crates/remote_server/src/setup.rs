@@ -7,6 +7,26 @@ pub use glibc::{GlibcVersion, RemoteLibc};
 use warp_core::channel::{Channel, ChannelState};
 pub const REMOTE_SERVER_ARTIFACT_VERSION_UNPINNED: &str = "unversioned";
 
+/// Custom releases must never install an upstream binary with a different RPC schema.
+fn custom_release_version() -> Option<&'static str> {
+    if ChannelState::channel() != Channel::Oss {
+        return None;
+    }
+    option_env!("WARP_CUSTOM_RELEASE_VERSION").filter(|version| {
+        let parts: Vec<_> = version.split('.').collect();
+        parts.len() == 3
+            && parts
+                .iter()
+                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    })
+}
+
+fn custom_artifact_url(version: &str, os: &str, arch: &str) -> String {
+    format!(
+        "https://github.com/sasha00123/warp/releases/download/personal-v{version}/warp-custom-{version}-remote-{os}-{arch}.tar.gz"
+    )
+}
+
 /// State machine for the remote server install → launch → initialize flow.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RemoteServerSetupState {
@@ -346,11 +366,7 @@ pub fn remote_server_dir() -> String {
         Channel::Preview => ".warp-preview",
         Channel::Dev | Channel::Integration => ".warp-dev",
         Channel::Local => ".warp-local",
-        Channel::Oss => {
-            // TODO(alokedesai): need to figure out how remote server works with warp-oss
-            // For now, return what Dev returns.
-            ".warp-dev"
-        }
+        Channel::Oss => ".warp-custom",
     };
     format!("~/{warp_dir}/remote-server")
 }
@@ -430,7 +446,7 @@ pub fn remote_server_daemon_data_dir(identity_key: &str) -> String {
 pub fn version_hash() -> Option<String> {
     use std::hash::{Hash, Hasher};
 
-    let version = ChannelState::app_version()?;
+    let version = custom_release_version().or_else(ChannelState::app_version)?;
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     version.hash(&mut hasher);
     Some(format!("{:016x}", hasher.finish())[..8].to_string())
@@ -487,6 +503,9 @@ pub fn binary_name() -> &'static str {
 pub fn remote_server_binary() -> String {
     let dir = remote_server_dir();
     let name = binary_name();
+    if let Some(version) = custom_release_version() {
+        return format!("{dir}/{name}-{version}");
+    }
     match ChannelState::channel() {
         Channel::Local | Channel::Oss => format!("{dir}/{name}"),
         Channel::Stable | Channel::Preview | Channel::Dev | Channel::Integration => {
@@ -534,6 +553,9 @@ fn pinned_version() -> &'static str {
 /// [`install_script`], so versioned download URLs do not reuse stale tarballs
 /// from a previous client version.
 pub fn remote_server_artifact_version() -> &'static str {
+    if let Some(version) = custom_release_version() {
+        return version;
+    }
     match ChannelState::channel() {
         Channel::Local | Channel::Oss => REMOTE_SERVER_ARTIFACT_VERSION_UNPINNED,
         Channel::Stable | Channel::Preview | Channel::Dev | Channel::Integration => {
@@ -576,14 +598,33 @@ const INSTALL_SCRIPT_TEMPLATE: &str = include_str!("install_remote_server.sh");
 /// `&version={v}` / `-{v}` on every other channel, where `v` falls back
 /// to `CARGO_PKG_VERSION` when no release tag is baked in.
 pub fn install_script(staging_tarball_path: Option<&str>) -> String {
-    let (vq, version_suffix) = match ChannelState::channel() {
+    let (vq, mut version_suffix) = match ChannelState::channel() {
         Channel::Local | Channel::Oss => (String::new(), String::new()),
         Channel::Stable | Channel::Preview | Channel::Dev | Channel::Integration => {
             let v = pinned_version();
             (format!("&version={v}"), format!("-{v}"))
         }
     };
+    if let Some(version) = custom_release_version() {
+        version_suffix = format!("-{version}");
+    }
+    let custom = ChannelState::channel() == Channel::Oss;
+    let artifact_url = if custom {
+        custom_artifact_url(remote_server_artifact_version(), "$os_name", "$arch_name")
+    } else {
+        format!(
+            "{}?package=tar&os=$os_name&arch=$arch_name&channel={}{}",
+            download_url(),
+            download_channel(),
+            vq
+        )
+    };
     INSTALL_SCRIPT_TEMPLATE
+        .replace("{artifact_url}", &artifact_url)
+        .replace(
+            "{artifact_binary_pattern}",
+            if custom { "warp-oss" } else { "oz*" },
+        )
         .replace("{download_base_url}", &download_url())
         .replace("{channel}", download_channel())
         .replace("{install_dir}", &remote_server_dir())
@@ -640,6 +681,13 @@ fn version_query() -> String {
 /// parameterized by the remote platform. Used by the SCP upload
 /// fallback to download the same artifact the shell script would fetch.
 pub fn download_tarball_url(platform: &RemotePlatform) -> String {
+    if ChannelState::channel() == Channel::Oss {
+        return custom_artifact_url(
+            remote_server_artifact_version(),
+            platform.os.as_str(),
+            platform.arch.as_str(),
+        );
+    }
     format!(
         "{}?package=tar&os={}&arch={}&channel={}{}",
         download_url(),
