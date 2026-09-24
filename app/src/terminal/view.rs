@@ -8875,7 +8875,7 @@ impl TerminalView {
             && !self.agent_view_controller.as_ref(app).is_active()
             && !self.has_active_cli_agent_input_session(app)
             && self
-                .current_prompt()
+                .current_prompt
                 .as_ref(app)
                 .chips(app)
                 .iter()
