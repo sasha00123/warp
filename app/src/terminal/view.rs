@@ -8879,7 +8879,7 @@ impl TerminalView {
                 .as_ref(app)
                 .chips(app)
                 .iter()
-                .any(|chip| matches!(chip.kind(), ContextChipKind::Ssh) && chip.value.is_some())
+                .any(|chip| matches!(chip.kind(), ContextChipKind::Ssh) && chip.value().is_some())
     }
 
     pub fn is_input_box_visible(&self, model: &TerminalModel, app: &AppContext) -> bool {
