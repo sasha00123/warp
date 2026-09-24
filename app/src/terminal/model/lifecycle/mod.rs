@@ -31,6 +31,8 @@ pub enum StartCommandOutcome {
     Coalesced,
     /// The active block was executing, so starting another command was rejected.
     RejectedExecuting,
+    /// The transport is disconnected, replaying, or awaiting input acknowledgement.
+    RejectedUnavailable,
     /// The terminal had terminated, so the start intent was ignored.
     IgnoredTerminated,
 }

@@ -1664,6 +1664,8 @@ fn native_shell_suggestion_results(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DenyExecutionReason {
+    /// A persistent transport cannot safely accept input right now. Keep the draft.
+    TransportUnavailable,
     /// Can't execute command because shell bootstrapping is still underway; shell isn't ready to
     /// execute user-supplied commands yet.
     NotBootstrapped,
@@ -7683,7 +7685,9 @@ impl Input {
         let model = self.model.lock();
         let active_block = model.block_list().active_block();
 
-        if !model.block_list().is_bootstrapped() {
+        if !model.accepts_command_input() {
+            CanExecuteCommand::No(DenyExecutionReason::TransportUnavailable)
+        } else if !model.block_list().is_bootstrapped() {
             CanExecuteCommand::No(DenyExecutionReason::NotBootstrapped)
         } else if active_block.is_active_and_long_running()
             && !active_block.is_in_band_command_block()

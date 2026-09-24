@@ -1200,6 +1200,24 @@ fn test_clone_command_from_blockgrid() {
 }
 
 #[test]
+fn persistent_copy_command_grid_preserves_indent_without_newline_mode() {
+    for newline_mode in [false, true] {
+        let mut block = create_test_block_with_grids(
+            BlockIndex::zero(), mock_blockgrid(""), mock_blockgrid(""), mock_blockgrid(""), false,
+        );
+        if newline_mode {
+            block.header_grid.prompt_and_command_grid_mut().set_mode(ansi::Mode::LineFeedNewLine);
+        } else {
+            block.header_grid.prompt_and_command_grid_mut().unset_mode(ansi::Mode::LineFeedNewLine);
+        }
+        let mut source = mock_blockgrid("first\r\n  second\r\nthird");
+        source.finish();
+        block.copy_command_grid(&source);
+        assert_eq!(block.command_to_string(), "first\n  second\nthird", "newline_mode={newline_mode}");
+    }
+}
+
+#[test]
 fn test_clone_command_from_blockgrid_long() {
     let block_index = BlockIndex::zero();
     // Grid contents (copying INTO this Grid):

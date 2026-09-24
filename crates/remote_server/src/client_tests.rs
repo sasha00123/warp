@@ -7,8 +7,9 @@ use super::*;
 use crate::proto::{
     ClientMessage, CodebaseIndexStatus, CodebaseIndexStatusState, CodebaseIndexStatusUpdated,
     CodebaseIndexStatusesSnapshot, ErrorCode, GetDiffStateResponse, InitializeResponse,
-    OpenBufferResponse, RemoteAgentContextSnapshot, RemoteContextFileProto, RunCommandResponse,
-    RunCommandSuccess, ServerMessage, WriteFile, client_message, host_scoped_request, notification,
+    OpenBufferResponse, PersistentWorkspaceRequest, PersistentWorkspaceResponse,
+    RemoteAgentContextSnapshot, RemoteContextFileProto, RunCommandResponse, RunCommandSuccess,
+    ServerMessage, WriteFile, client_message, host_scoped_request, notification,
     run_command_response, server_message, session_scoped_request,
 };
 use crate::protocol;
@@ -419,6 +420,57 @@ async fn run_command_round_trip() {
     assert_eq!(success.stdout, b"output of: echo hello");
     assert!(success.stderr.is_empty());
     assert_eq!(success.exit_code, Some(0));
+}
+
+#[tokio::test]
+async fn persistent_workspace_round_trip_uses_the_control_protocol() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|message| {
+        let session_scoped_request::Message::PersistentWorkspace(request) =
+            unwrap_session_scoped(message)
+        else {
+            panic!("Expected a structured persistent-workspace request");
+        };
+        assert_eq!(request.protocol_version, 1);
+        server_message::Message::PersistentWorkspaceResponse(PersistentWorkspaceResponse {
+            protocol_version: 1,
+            management_supported: true,
+            ..Default::default()
+        })
+    });
+    let response = client
+        .persistent_workspace(PersistentWorkspaceRequest {
+            protocol_version: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(response.management_supported);
+    assert!(!response.terminal_transport_supported);
+    assert!(!response.block_replay_supported);
+}
+
+#[tokio::test]
+async fn persistent_workspace_reports_an_older_extensions_rejection() {
+    let (client, _disconnect_rx, _executor) = setup_mock_client(|_| {
+        server_message::Message::Error(crate::proto::ErrorResponse {
+            code: ErrorCode::InvalidRequest.into(),
+            message: "SessionScopedRequest had no message variant set".into(),
+        })
+    });
+    let error = client
+        .persistent_workspace(PersistentWorkspaceRequest {
+            protocol_version: 1,
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ClientError::ServerError {
+            code: ErrorCode::InvalidRequest,
+            ..
+        }
+    ));
 }
 
 #[tokio::test]

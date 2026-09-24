@@ -283,7 +283,6 @@ impl Sessions {
         }
     }
 
-    #[cfg(test)]
     pub fn with_command_executor(mut self, executor: Arc<dyn CommandExecutor>) -> Self {
         self.executor_for_all_sessions = Some(executor);
         self
@@ -1055,6 +1054,13 @@ impl Session {
             self.info.is_ssh_wrapper_session,
             IsSSHWrapperSession::Yes { .. }
         )
+    }
+
+    pub fn ssh_control_path(&self) -> Option<&std::path::Path> {
+        match &self.info.is_ssh_wrapper_session {
+            IsSSHWrapperSession::Yes { socket_path, .. } => Some(socket_path.as_path()),
+            IsSSHWrapperSession::No => None,
+        }
     }
 
     pub fn is_subshell_or_ssh(&self) -> bool {

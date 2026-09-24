@@ -434,6 +434,12 @@ pub struct TerminalModel {
     /// cleared at the next precmd, because it is only relevant for the block where it was set.
     ignore_bootstrapping_messages: bool,
 
+    /// Persistent remote output may contain command starts that were never
+    /// entered in this local editor (offline execution or a reopened view).
+    persistent_workspace_mode: bool,
+    persistent_root_session_id: Option<SessionId>,
+    command_input_gate: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+
     // This session's startup directory path. If None, the startup directory is treated as default
     // (the user's home directory).
     session_startup_path: Option<PathBuf>,
@@ -1098,6 +1104,9 @@ impl TerminalModel {
             active_shell_launch_data: None,
             pending_session_info: None,
             ignore_bootstrapping_messages: false,
+            persistent_workspace_mode: false,
+            persistent_root_session_id: None,
+            command_input_gate: None,
             session_startup_path,
             is_receiving_in_band_command_output: IsReceivingInBandCommandOutput::No,
             #[cfg(windows)]
@@ -1497,6 +1506,56 @@ impl TerminalModel {
 
     pub fn ignore_bootstrapping_messages(&mut self) {
         self.ignore_bootstrapping_messages = true;
+    }
+
+    /// Enables command reconstruction from validated shell integration hooks.
+    /// This does not suppress historical bootstrap or query side effects; the
+    /// persistent transport must gate those separately in event-queue order.
+    pub fn enable_persistent_workspace_mode(&mut self) {
+        self.persistent_workspace_mode = true;
+    }
+
+    /// A disconnected persistent terminal remains editable, but submitting a
+    /// command must not mutate its block or clear the user's draft.
+    pub fn accepts_command_input(&self) -> bool {
+        self.command_input_gate.as_ref().is_none_or(|gate| gate())
+    }
+
+    pub fn set_command_input_gate(&mut self, gate: Arc<dyn Fn() -> bool + Send + Sync>) {
+        self.command_input_gate = Some(gate);
+    }
+
+    pub fn configure_persistent_ssh_session(
+        &mut self,
+        session_id: SessionId,
+        control_path: PathBuf,
+        remote_shell: String,
+    ) {
+        self.enable_persistent_workspace_mode();
+        self.register_session_id(session_id);
+        self.persistent_root_session_id = Some(session_id);
+        self.pending_ssh_wrapper_session = Some(SSHValue {
+            socket_path: control_path,
+            remote_shell,
+            remote_session_id: Some(session_id.as_u64()),
+            external_control_master: true,
+            ..Default::default()
+        });
+    }
+
+    pub fn is_persistent_root_session(&self, session_id: SessionId) -> bool {
+        self.persistent_root_session_id == Some(session_id)
+    }
+
+    /// Preserve a persistent workspace's final block after its remote shell exits.
+    /// The transport continues draining recorded output without closing the view.
+    pub fn finish_persistent_shell(&mut self, exit_code: i32) {
+        if !self.persistent_workspace_mode || self.block_list.active_block().finished() {
+            return;
+        }
+        self.exit_alt_screen(true);
+        self.block_list.active_block_mut().finish(exit_code);
+        self.event_proxy.send_wakeup_event();
     }
 
     pub fn exit(&mut self, reason: ExitReason) {
@@ -2421,7 +2480,10 @@ impl TerminalModel {
     }
 
     fn apply_preexec(&mut self, data: PreexecValue) {
-        self.block_list.apply_preexec_to_active(data);
+        self.block_list.apply_preexec_with_command_fallback(
+            data,
+            self.persistent_workspace_mode,
+        );
         self.emit_handler_event(HandlerEvent::Preexec);
     }
 
@@ -3714,3 +3776,11 @@ impl ModeProvider for TerminalModel {
 #[cfg(test)]
 #[path = "terminal_model_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "persistent_output_replay_tests.rs"]
+mod persistent_output_replay_tests;
+
+#[cfg(all(test, unix))]
+#[path = "persistent_shell_integration_tests.rs"]
+mod persistent_shell_integration_tests;

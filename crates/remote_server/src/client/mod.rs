@@ -337,6 +337,23 @@ impl RemoteServerClient {
         self.disconnected.load(Ordering::Acquire)
     }
 
+    /// Probe support before enabling controls; older extensions return an unsupported-request error.
+    pub async fn persistent_workspace(
+        &self,
+        request: crate::proto::PersistentWorkspaceRequest,
+    ) -> Result<crate::proto::PersistentWorkspaceResponse, ClientError> {
+        let request_id = RequestId::new();
+        let message = ClientMessage::session_scoped(
+            request_id.to_string(),
+            session_scoped_request::Message::PersistentWorkspace(request),
+        );
+        let response = self.send_request_internal(request_id, message).await?;
+        match response.message {
+            Some(server_message::Message::PersistentWorkspaceResponse(response)) => Ok(response),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
     /// Sends an `Initialize` request and awaits the `InitializeResponse`.
     pub async fn initialize(
         &self,

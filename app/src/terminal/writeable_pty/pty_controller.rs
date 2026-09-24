@@ -80,6 +80,7 @@ pub struct PtyController<T: EventLoopSender> {
     model_event_dispatcher: ModelHandle<ModelEventDispatcher>,
     pending_writes: VecDeque<PtyWrite>,
     is_user_command_executing: bool,
+    persistent_replaying: bool,
     is_bracketed_paste_enabled: bool,
     /// If we're bootstrapping the shell by sourcing a file with the bootstrap
     /// script, this will hold the handle to the file.  Once bootstrapping is
@@ -101,6 +102,14 @@ impl<T: EventLoopSender> PtyController<T> {
         ctx: &mut ModelContext<Self>,
     ) -> Self {
         ctx.subscribe_to_model(&model_event_dispatcher, |me, _, event, ctx| match event {
+            ModelEvent::PersistentReplayState { replaying } => {
+                me.persistent_replaying = *replaying;
+                if !replaying {
+                    let model = me.terminal_model.lock();
+                    me.is_user_command_executing = model.block_list().active_block().state()
+                        == crate::terminal::model::block::BlockState::Executing;
+                }
+            }
             ModelEvent::Handler(AnsiHandlerEvent::UserCommandFinished) => {
                 me.is_user_command_executing = false;
             }
@@ -119,6 +128,7 @@ impl<T: EventLoopSender> PtyController<T> {
                 me.is_bracketed_paste_enabled = false;
             }
             ModelEvent::HonorPS1OutOfSync => {
+                if me.persistent_replaying { return; }
                 // We force re-sync the PS1 state of Warp settings with the shell's environment variable, $WARP_HONOR_PS1, via
                 // a bindkey (which triggers a shell function).
                 let honor_ps1 = *SessionSettings::as_ref(ctx).honor_ps1;
@@ -140,6 +150,7 @@ impl<T: EventLoopSender> PtyController<T> {
 
         ctx.subscribe_to_model(&line_editor_status, |me, _, event, ctx| {
             if let LineEditorStatusEvent::Active = event {
+                if me.persistent_replaying { return; }
                 let input_reporting_seq = me
                     .model_event_dispatcher
                     .as_ref(ctx)
@@ -182,6 +193,7 @@ impl<T: EventLoopSender> PtyController<T> {
             model_event_dispatcher,
             pending_writes: VecDeque::new(),
             is_user_command_executing: false,
+            persistent_replaying: false,
             is_bracketed_paste_enabled: false,
             #[cfg(not(target_family = "wasm"))]
             bootstrap_file: None,
@@ -327,6 +339,13 @@ impl<T: EventLoopSender> PtyController<T> {
         pending_session_info: &SessionInfo,
         ctx: &mut ModelContext<Self>,
     ) {
+        if self.persistent_replaying
+            || self.terminal_model.lock().is_persistent_root_session(pending_session_info.session_id)
+        {
+            // The root workspace was initialized remotely from startup files.
+            // Replaying its InitShell must never type bootstrap into its job.
+            return;
+        }
         let shell_type = pending_session_info.shell.shell_type();
 
         #[cfg(feature = "local_fs")]
@@ -493,6 +512,9 @@ impl<T: EventLoopSender> PtyController<T> {
             let mut model = self.terminal_model.lock();
 
             // Explicitly start the block now that the command is executed.
+            if !model.accepts_command_input() {
+                return StartCommandOutcome::RejectedUnavailable;
+            }
             let outcome = match source {
                 CommandExecutionSource::AI { metadata } => {
                     model.start_command_execution_with_ai_metadata(metadata)

@@ -39,6 +39,7 @@ impl SshRemoteServerSupport {
 /// allowing other models/views to subscribe to `TerminalModel` events like it would any other
 /// entity within the UI framework.
 pub struct ModelEventDispatcher {
+    persistent_replaying: bool,
     last_start_prompt_marker: Option<PromptKind>,
     active_session_id: Option<SessionId>,
     sessions: ModelHandle<Sessions>,
@@ -71,6 +72,7 @@ impl ModelEventDispatcher {
             |_, _| (),
         );
         Self {
+            persistent_replaying: false,
             active_session_id: None,
             last_start_prompt_marker: None,
             sessions,
@@ -101,7 +103,18 @@ impl ModelEventDispatcher {
     /// Emits the corresponding `ModelEvent` for the received `HandlerEvent` emitted by
     /// `TerminalModel` when some `ansi::Handler` method is called.
     fn handle_terminal_model_event(&mut self, event: Event, ctx: &mut ModelContext<Self>) {
+        if let Event::PersistentReplayState { replaying } = &event {
+            self.persistent_replaying = *replaying;
+        } else if self.persistent_replaying && replay_has_external_side_effect(&event) {
+            // Reconstruct terminal state, not historical desktop actions or
+            // shell initialization. In particular, OSC 52 must never read or
+            // overwrite today's clipboard while old output is replayed.
+            return;
+        }
         let event_to_emit = match event {
+            Event::PersistentReplayState { replaying } => {
+                ModelEvent::PersistentReplayState { replaying }
+            }
             Event::Handler(HandlerEvent::InitShell {
                 pending_session_info,
             }) => {
@@ -369,6 +382,17 @@ impl ModelEventDispatcher {
     }
 }
 
+fn replay_has_external_side_effect(event: &Event) -> bool {
+    matches!(event,
+        Event::ClipboardLoad(..) | Event::ClipboardStore(..) | Event::Bell
+        | Event::PluggableNotification { .. } | Event::FinishUpdate(_)
+        | Event::ExternalShellWidgetSelection(_) | Event::PreInteractiveSSHSession
+        | Event::SSH(_) | Event::ExitShell { .. } | Event::SSHControlMasterError
+        | Event::DetectedEndOfSshLogin(_) | Event::InitSubshell(_)
+        | Event::SourcedRcFileInSubshell(_) | Event::HonorPS1OutOfSync
+    )
+}
+
 /// The type of prompt for which a `PromptStart` event has been received.
 enum PromptKind {
     Left,
@@ -378,6 +402,7 @@ enum PromptKind {
 /// Set of events that were dispatched from the [`crate::terminal::TerminalModel`] while parsing
 /// PTY output.
 pub enum ModelEvent {
+    PersistentReplayState { replaying: bool },
     MouseCursorDirty,
     Title(String),
     VisibleBootstrapBlock,

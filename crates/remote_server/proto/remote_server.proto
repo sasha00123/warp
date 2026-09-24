@@ -65,6 +65,7 @@ message SessionScopedRequest {
     // connection, so the response must come back on that same connection.
     OpenBuffer open_buffer = 5;
     GetDiffState get_diff_state = 6;
+    PersistentWorkspaceRequest persistent_workspace = 7;
   }
 }
 
@@ -125,7 +126,108 @@ message ServerMessage {
     GitHubRepositoryInfoPush github_repository_info_push = 36;
     RipgrepSearchResponse ripgrep_search_response = 37;
     RemoteAgentContextSnapshot remote_agent_context_snapshot = 33;
+    PersistentWorkspaceResponse persistent_workspace_response = 38;
   }
+}
+
+// Probe before enabling persistent-workspace controls. This capability is separate
+// from live terminal transport and block replay; management alone cannot enable them.
+enum PersistentWorkspaceOperation {
+  PERSISTENT_WORKSPACE_OPERATION_PROBE = 0;
+  PERSISTENT_WORKSPACE_OPERATION_CREATE = 1;
+  PERSISTENT_WORKSPACE_OPERATION_LIST = 2;
+  PERSISTENT_WORKSPACE_OPERATION_RESOLVE = 3;
+  PERSISTENT_WORKSPACE_OPERATION_TERMINATE = 4;
+  PERSISTENT_WORKSPACE_OPERATION_TERMINAL = 5;
+}
+
+enum PersistentHistoryRetention {
+  UNTIL_WORKSPACE_DELETED = 0;
+  ROLLING = 1;
+}
+
+message PersistentWorkspaceRequest {
+  uint32 protocol_version = 1;
+  PersistentWorkspaceOperation operation = 2;
+  // Client-generated lowercase UUID without hyphens; retained across create retries.
+  string workspace_id = 3;
+  // Server-generated incarnation, required for resolve and terminate.
+  string generation = 4;
+  optional string working_directory = 5;
+  optional PersistentTerminalRequest terminal = 6;
+  optional PersistentShellBootstrap bootstrap = 7;
+  // Only valid on initialized Create. Omitted means retain until workspace deletion.
+  optional PersistentHistoryRetention history_retention = 8;
+}
+
+// Only valid on Create. These are the matching app's canonical bootstrap assets,
+// executed once from private startup files, never typed on reattachment.
+message PersistentShellBootstrap {
+  string shell = 1;
+  bytes init_script = 2;
+  bytes bootstrap_script = 3;
+}
+
+message PersistentTerminalRequest {
+  enum Operation {
+    ATTACH = 0;
+    READ = 1;
+    INPUT = 2;
+    RESIZE = 3;
+  }
+  Operation operation = 1;
+  uint64 cursor = 2;
+  bytes input = 3;
+  uint32 columns = 4;
+  uint32 rows = 5;
+}
+
+message PersistentTerminalOutput {
+  uint64 start_cursor = 1;
+  uint64 next_cursor = 2;
+  uint64 earliest_cursor = 3;
+  uint64 high_watermark = 4;
+  bool history_gap = 5;
+  bool closed = 6;
+  bytes output = 7;
+  // Recorder health is not shell running/idle state.
+  bool recorder_connected = 8;
+}
+
+message PersistentWorkspace {
+  string workspace_id = 1;
+  string generation = 2;
+  string session_id = 3;
+  string window_id = 4;
+  string pane_id = 5;
+  uint32 shell_pid = 6;
+  // False does not imply idle: running/idle needs shell integration events.
+  bool exited = 7;
+  // Present only for recorder-gated, shell-integrated workspaces. Do not
+  // bootstrap an arbitrary existing pane when this metadata is absent.
+  optional string shell = 8;
+  // Root shell execution hooks, independent of foreground process names.
+  // Absent means unknown (including pre-instrumentation workspaces).
+  optional string activity = 9;
+  // Present only when tmux has reaped a normally exited shell. Never infer zero.
+  optional int32 exit_code = 10;
+  // Compressed cold segments plus committed hot bytes; absent when unavailable.
+  optional uint64 history_storage_bytes = 11;
+}
+
+message PersistentWorkspaceError {
+  string code = 1;
+  string message = 2;
+}
+
+message PersistentWorkspaceResponse {
+  uint32 protocol_version = 1;
+  bool management_supported = 2;
+  bool terminal_transport_supported = 3;
+  bool block_replay_supported = 4;
+  repeated PersistentWorkspace workspaces = 5;
+  optional PersistentWorkspaceError error = 6;
+  optional PersistentTerminalOutput terminal_output = 7;
 }
 
 // ── Initialize handshake

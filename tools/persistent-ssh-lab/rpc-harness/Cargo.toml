@@ -1,0 +1,14 @@
+[package]
+name = "persistent-workspace-rpc-harness"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+prost = "0.14"
+flate2 = "1.0.17"
+
+[build-dependencies]
+prost-build = "0.14"

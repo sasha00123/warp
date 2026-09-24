@@ -969,6 +969,9 @@ impl ServerModel {
                     Some(session_scoped_request::Message::Initialize(m)) => {
                         self.handle_initialize(m, &request_id, conn_id, ctx)
                     }
+                    Some(session_scoped_request::Message::PersistentWorkspace(request)) => {
+                        self.handle_persistent_workspace(request, &request_id, conn_id, ctx)
+                    }
                     Some(session_scoped_request::Message::NavigatedToDirectory(m)) => {
                         self.handle_navigated_to_directory(m, &request_id, conn_id, ctx)
                     }
@@ -1990,6 +1993,58 @@ impl ServerModel {
                         result: Some(result_oneof),
                     }),
                 );
+            },
+            ctx,
+        );
+        HandlerOutcome::Async(Some(handle))
+    }
+
+    fn handle_persistent_workspace(
+        &mut self,
+        request: remote_server::proto::PersistentWorkspaceRequest,
+        request_id: &RequestId,
+        conn_id: ConnectionId,
+        ctx: &mut ModelContext<Self>,
+    ) -> HandlerOutcome {
+        let (sender, receiver) = futures::channel::oneshot::channel();
+        let worker = std::thread::Builder::new()
+            .name("persistent-workspace".into())
+            .spawn(move || {
+                #[cfg(unix)]
+                let response = remote_server::persistent_workspace_rpc::handle(request);
+                #[cfg(not(unix))]
+                let response = {
+                    drop(request);
+                    remote_server::proto::PersistentWorkspaceResponse {
+                        protocol_version: 1,
+                        error: Some(remote_server::proto::PersistentWorkspaceError {
+                            code: "unsupported_platform".into(),
+                            message: "Persistent workspaces require a Unix remote host".into(),
+                        }),
+                        ..Default::default()
+                    }
+                };
+                let _ = sender.send(response);
+            });
+        if let Err(error) = worker {
+            return HandlerOutcome::Sync(server_message::Message::Error(ErrorResponse {
+                code: ErrorCode::Internal.into(),
+                message: format!("Could not start workspace worker: {error}"),
+            }));
+        }
+        let response_id = request_id.clone();
+        let handle = self.spawn_request_handler(
+            request_id.clone(),
+            receiver,
+            move |me, response, _ctx| {
+                let message = match response {
+                    Ok(response) => server_message::Message::PersistentWorkspaceResponse(response),
+                    Err(error) => server_message::Message::Error(ErrorResponse {
+                        code: ErrorCode::Internal.into(),
+                        message: format!("Workspace worker failed: {error}"),
+                    }),
+                };
+                me.send_server_message(Some(conn_id), Some(&response_id), message);
             },
             ctx,
         );

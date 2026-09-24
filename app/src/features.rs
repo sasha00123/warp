@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use warp_core::channel::ChannelState;
+use warp_core::channel::{Channel, ChannelState};
 pub use warp_core::features::*;
 
 /// Mark all features which should be enabled on the current channel as enabled.
@@ -12,10 +12,21 @@ pub fn init_feature_flags() {
     mark_initialized();
 }
 
+fn persistent_ssh_transport_enabled_by_default(channel: Channel) -> bool {
+    cfg!(unix) && channel == Channel::Oss
+}
+
 /// Returns all feature flags which should be enabled in the current channel.
 fn enabled_features() -> HashSet<FeatureFlag> {
     // Enable features overridden for the given channel.
     let mut flags = ChannelState::additional_features();
+
+    // Persistent workspaces use the existing SSH-extension protocol. OSS builds
+    // do not receive RELEASE_FLAGS, so explicitly enable that transport without
+    // opting into unrelated release features or bypassing installation consent.
+    if persistent_ssh_transport_enabled_by_default(ChannelState::channel()) {
+        flags.insert(FeatureFlag::SshRemoteServer);
+    }
 
     // Enable flags for release builds, if appropriate.
     if ChannelState::is_release_bundle() {
@@ -530,4 +541,20 @@ fn enabled_features() -> HashSet<FeatureFlag> {
     ]);
 
     flags
+}
+
+#[cfg(test)]
+mod persistent_ssh_tests {
+    use super::*;
+
+    #[test]
+    fn persistent_ssh_transport_is_available_in_unix_oss_builds() {
+        assert_eq!(
+            persistent_ssh_transport_enabled_by_default(Channel::Oss),
+            cfg!(unix)
+        );
+        for channel in [Channel::Stable, Channel::Preview, Channel::Dev, Channel::Local, Channel::Integration] {
+            assert!(!persistent_ssh_transport_enabled_by_default(channel));
+        }
+    }
 }

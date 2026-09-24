@@ -76,8 +76,19 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
   }
   trap __warp_generator_pid_file_cleanup EXIT
 
+  warp_persistent_activity () {
+    if [[ "$WARP_PERSISTENT_WORKSPACE" == "1" && -n "$WARP_PERSISTENT_ROOT_SESSION" && "$WARP_SESSION_ID" == "$WARP_PERSISTENT_ROOT_SESSION" && -f "$WARP_PERSISTENT_ACTIVITY_PATH" ]]; then
+      { builtin printf '%s\n' "$1" >| "$WARP_PERSISTENT_ACTIVITY_PATH"; } 2>/dev/null
+    fi
+    return 0
+  }
+
   # Writes a hex-encoded JSON message to the pty.
   warp_send_json_message () {
+      case "$1" in
+        '{"hook": "Preexec",'*) warp_persistent_activity running ;;
+        '{"hook": "Precmd",'*|'{"hook": "CommandFinished",'*) warp_persistent_activity idle ;;
+      esac
       # Sends a message to the controlling terminal as a DCS control sequence.
       # Note that because the JSON string may contain characters that we don't control (including
       # unicode), we encode it as hexadecimal string to avoid prematurely calling unhook if
@@ -1081,6 +1092,19 @@ if [[ -z $WARP_BOOTSTRAPPED ]]; then
               # If we cannot generate a non-zero random token, run plain SSH instead.
               command ssh "${@:1}"
               return
+          fi
+
+          # If the user's SSH config sets a RemoteCommand for this destination,
+          # Capture reconnect arguments locally, never in a remote hook.
+          if [[ ${WARP_IS_LOCAL_SHELL_SESSION:-} == 1 ]]; then
+              (
+                  umask 077
+                  _ew_recipe_dir="$HOME/.local/state/eternalwarp/ssh-recipes"
+                  command mkdir -p "$_ew_recipe_dir" || exit
+                  _ew_recipe="$_ew_recipe_dir/$remote_session_id.argv"
+                  setopt NOCLOBBER
+                  { printf 'EWSSH1\0%s\0' "$PWD"; printf '%s\0' "$@"; } > "$_ew_recipe" || exit
+              ) 2>/dev/null
           fi
 
           # If the user's SSH config sets a RemoteCommand for this destination,

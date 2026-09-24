@@ -11444,6 +11444,7 @@ dependencies = [
  "bounded-vec-deque",
  "command",
  "dashmap",
+ "flate2",
  "futures",
  "futures-lite 1.13.0",
  "getrandom 0.2.16",

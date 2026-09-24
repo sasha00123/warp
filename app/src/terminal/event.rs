@@ -26,6 +26,9 @@ use crate::terminal::shell::ShellType;
 #[derive(Clone)]
 /// Events sent to the main thread by the terminal model & event loop.
 pub enum Event {
+    /// Ordered with parsed output, so historical hooks cannot trigger writes
+    /// after the parser has already advanced into live output.
+    PersistentReplayState { replaying: bool },
     CompletionsFinished(Vec<ShellCompletion>, Option<warp_completer::meta::Span>),
     MouseCursorDirty,
     Title(String),
@@ -410,6 +413,9 @@ impl UserBlockCompleted {
 impl Debug for Event {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            Event::PersistentReplayState { replaying } => {
+                f.debug_struct("PersistentReplayState").field("replaying", replaying).finish()
+            }
             Event::CompletionsFinished(..) => write!(f, "CompletionsFinished"),
             Event::MouseCursorDirty => write!(f, "MouseCursorDirty"),
             Event::BlockCompleted(_) => write!(f, "BlockCompleted"),

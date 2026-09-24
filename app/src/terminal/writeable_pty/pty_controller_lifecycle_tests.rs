@@ -29,6 +29,35 @@ fn terminal_model() -> Arc<FairMutex<TerminalModel>> {
 }
 
 #[test]
+fn persistent_disconnected_submission_preserves_block_and_controller_state() {
+    App::test((), |mut app| async move {
+        let model = terminal_model();
+        assert!(model.lock().accepts_command_input());
+        model.lock().set_command_input_gate(Arc::new(|| false));
+        assert!(!model.lock().is_read_only());
+        let original_state = model.lock().block_list().active_block().state();
+        let (_events_tx, events_rx) = async_channel::unbounded();
+        let (_executor_tx, executor_rx) = async_channel::unbounded();
+        let sessions = app.add_model(|_| Sessions::new_for_test());
+        let events = app.add_model(|ctx| ModelEventDispatcher::new(events_rx, sessions.clone(), ctx));
+        let line_editor = app.add_model(|ctx| LineEditorStatus::new(events.clone(), sessions.clone(), ctx));
+        let sender = TestEventLoopSender::default();
+        let controller = app.add_model(|ctx| PtyController::new(sender.clone(), events, line_editor,
+            sessions, executor_rx, model.clone(), ctx));
+        let outcome = controller.update(&mut app, |controller, ctx| {
+            controller.write_command("must-not-run", ShellType::Bash, CommandExecutionSource::User, ctx)
+        });
+        assert_eq!(outcome, StartCommandOutcome::RejectedUnavailable);
+        assert_eq!(model.lock().block_list().active_block().state(), original_state);
+        assert!(sender.messages.lock().is_empty());
+        controller.read(&app, |controller, _| {
+            assert!(!controller.is_user_command_executing);
+            assert!(controller.pending_writes.is_empty());
+        });
+    });
+}
+
+#[test]
 fn rejected_and_coalesced_starts_do_not_mutate_controller_or_write_bytes() {
     App::test((), |mut app| async move {
         let model = terminal_model();

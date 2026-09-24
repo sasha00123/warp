@@ -3396,6 +3396,14 @@ impl BlockList {
     }
 
     pub(super) fn apply_preexec_to_active(&mut self, data: PreexecValue) {
+        self.apply_preexec_with_command_fallback(data, false);
+    }
+
+    pub(super) fn apply_preexec_with_command_fallback(
+        &mut self,
+        data: PreexecValue,
+        recover_missing_command: bool,
+    ) {
         // We don't start handling early output until the session is fully bootstrapped,
         // because the distinction between typeahead and background output only
         // matters for user input.
@@ -3404,6 +3412,27 @@ impl BlockList {
         }
         self.ensure_active_block_started();
 
+        // A persistent view can miss local editor input entirely. Reconstruct
+        // only a missing grid, after ordinary typeahead repair, so an existing
+        // styled/aliased command remains untouched. Do this before Preexec
+        // emits AfterBlockStarted so subscribers see the recovered command.
+        if recover_missing_command
+            && self.active_block().command_should_show_as_empty_when_finished()
+        {
+            // Shell hooks contain logical newlines, while the command grid
+            // consumes terminal bytes. LF alone preserves the previous column.
+            let mut command = Vec::with_capacity(data.command.len());
+            let mut previous = None;
+            for byte in data.command.bytes() {
+                if byte == b'\n' && previous != Some(b'\r') {
+                    command.push(b'\r');
+                }
+                command.push(byte);
+                previous = Some(byte);
+            }
+            self.active_block_mut().init_command(&command);
+            self.update_active_block_height();
+        }
         self.active_block_mut().apply_preexec(data);
     }
 

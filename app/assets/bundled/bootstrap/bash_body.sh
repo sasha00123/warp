@@ -67,8 +67,21 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     }
     trap __warp_generator_pid_file_cleanup EXIT
 
+    # This private file belongs to this root shell incarnation, not to an SSH
+    # client. Missing/partial state is reported as unknown by the picker.
+    warp_persistent_activity () {
+      if [[ "$WARP_PERSISTENT_WORKSPACE" == "1" && -n "$WARP_PERSISTENT_ROOT_SESSION" && "$WARP_SESSION_ID" == "$WARP_PERSISTENT_ROOT_SESSION" && -f "$WARP_PERSISTENT_ACTIVITY_PATH" ]]; then
+        { builtin printf '%s\n' "$1" >| "$WARP_PERSISTENT_ACTIVITY_PATH"; } 2>/dev/null
+      fi
+      return 0
+    }
+
     # Writes a hex-encoded JSON message to the pty.
     warp_send_json_message () {
+        case "$1" in
+          '{"hook": "Preexec",'*) warp_persistent_activity running ;;
+          '{"hook": "Precmd",'*|'{"hook": "CommandFinished",'*) warp_persistent_activity idle ;;
+        esac
         # Sends a message to the controlling terminal as a DSC control sequence.
         # Note that because the JSON string may contain characters that we don't control (including
         # unicode), we encode it as hexadecimal string to avoid prematurely calling unhook if
@@ -123,6 +136,10 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
 
     # Expects the first argument to be the shell hook.
     warp_send_hook_via_kv_pairs_start () {
+      case "$1" in
+        Preexec) warp_persistent_activity running ;;
+        Precmd|CommandFinished) warp_persistent_activity idle ;;
+      esac
       printf "${OSC_START}k;A;%s\a" $1
     }
 
@@ -402,6 +419,18 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
     # Note that this is very performance sensitive code, so try not to
     # invoke any external commands in here.
     warp_preexec () {
+        local warp_reported_command="$BASH_COMMAND"
+        if [[ ${WARP_PERSISTENT_WORKSPACE:-} == 1 ]]; then
+            # DEBUG exposes only the first simple command of a compound command.
+            # A newly appended history entry preserves the complete submission.
+            # Never reuse the previous entry when history ignores this command.
+            local warp_current_history
+            warp_current_history=$(HISTTIMEFORMAT= builtin history 1)
+            if [[ -n "$warp_current_history" && "$warp_current_history" != "${_WARP_PERSISTENT_LAST_HISTORY:-}" && -n "$1" ]]; then
+                warp_reported_command="$1"
+            fi
+            _WARP_PERSISTENT_LAST_HISTORY="$warp_current_history"
+        fi
         # Use the $BASH_COMMAND environment variable instead of $1, which is passed in by bash_preeexec.
         #
         # Bash_preexec intends to pass the command to preexec functions (as $1), but it utilizes session
@@ -410,11 +439,11 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         # by history.
         if [ "$WARP_IN_MSYS2" = true ]; then
           warp_send_hook_via_kv_pairs_start "Preexec"
-          warp_send_hook_kv_pair "command" "$BASH_COMMAND"
+          warp_send_hook_kv_pair "command" "$warp_reported_command"
           warp_send_hook_kv_pair "session_id" "$WARP_SESSION_ID"
           warp_send_hook_via_kv_pairs_end
         else
-          local truncated_command=$(warp_escape_json "$BASH_COMMAND")
+          local truncated_command=$(warp_escape_json "$warp_reported_command")
           warp_send_json_message "{\"hook\": \"Preexec\", \"value\": {\"command\": \"$truncated_command\", \"session_id\": $WARP_SESSION_ID}}"
         fi
         warp_maybe_send_reset_grid_osc
@@ -574,6 +603,9 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
         # command that was run.
         local exit_code=$?
         local next_block_id="precmd-$WARP_SESSION_ID-$((block_id++))"
+        if [[ ${WARP_PERSISTENT_WORKSPACE:-} == 1 ]]; then
+            _WARP_PERSISTENT_LAST_HISTORY=$(HISTTIMEFORMAT= builtin history 1)
+        fi
         if [ "$WARP_IN_MSYS2" = true ]; then
           warp_send_hook_via_kv_pairs_start "CommandFinished"
           warp_send_hook_kv_pair "exit_code" "$exit_code"
@@ -1216,6 +1248,19 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
                 # If we cannot generate a non-zero random token, run plain SSH instead.
                 command ssh "${@:1}"
                 return
+            fi
+
+            # If the user's SSH config sets a RemoteCommand for this destination,
+            # Capture reconnect arguments locally, never in a remote hook.
+            if [[ ${WARP_IS_LOCAL_SHELL_SESSION:-} == 1 ]]; then
+                (
+                    umask 077
+                    _ew_recipe_dir="$HOME/.local/state/eternalwarp/ssh-recipes"
+                    command mkdir -p "$_ew_recipe_dir" || exit
+                    _ew_recipe="$_ew_recipe_dir/$remote_session_id.argv"
+                    set -o noclobber
+                    { printf 'EWSSH1\0%s\0' "$PWD"; printf '%s\0' "$@"; } > "$_ew_recipe" || exit
+                ) 2>/dev/null
             fi
 
             # If the user's SSH config sets a RemoteCommand for this destination,

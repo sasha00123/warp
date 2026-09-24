@@ -1699,6 +1699,10 @@ pub enum CodeDiffAction {
 }
 
 pub enum Event {
+    #[cfg(all(unix, feature = "local_tty"))]
+    OpenPersistentWorkspace(crate::terminal::persistent_tty::terminal_manager::WorkspaceAttachment),
+    #[cfg(all(unix, feature = "local_tty"))]
+    OpenPersistentRecovery(crate::terminal::persistent_tty::terminal_manager::WorkspaceAttachment),
     AppStateChanged,
     Escape,
     Exited,
@@ -2511,6 +2515,12 @@ struct LocalSessionCanonicalPwdCache {
 }
 
 pub struct TerminalView {
+    #[cfg(all(unix, feature = "local_tty"))]
+    pub(crate) persistent_workspace: Option<crate::terminal::persistent_tty::terminal_manager::WorkspaceAttachment>,
+    #[cfg(all(unix, feature = "local_tty"))]
+    pub(crate) persistent_transport: Option<crate::terminal::persistent_tty::transport::TransportHandle>,
+    #[cfg(all(unix, feature = "local_tty"))]
+    pub(crate) persistent_status: Option<ViewHandle<crate::terminal::persistent_tty::status_view::StatusView>>,
     pub model: Arc<FairMutex<TerminalModel>>,
     view_handle: WeakViewHandle<Self>,
 
@@ -4367,6 +4377,12 @@ impl TerminalView {
 
         let window_id = ctx.window_id();
         let mut terminal_view = Self {
+            #[cfg(all(unix, feature = "local_tty"))]
+            persistent_workspace: None,
+            #[cfg(all(unix, feature = "local_tty"))]
+            persistent_transport: None,
+            #[cfg(all(unix, feature = "local_tty"))]
+            persistent_status: None,
             model,
             input,
             inline_menu_positioner,
@@ -12290,6 +12306,7 @@ impl TerminalView {
 
     fn handle_terminal_event(&mut self, event: &ModelEvent, ctx: &mut ViewContext<Self>) {
         match event {
+            ModelEvent::PersistentReplayState { .. } => {}
             ModelEvent::TerminalClear => {
                 self.handle_terminal_wakeup((), ctx);
                 self.update_scroll_position_locking(ScrollPositionUpdate::AfterClear, ctx);
@@ -28822,6 +28839,10 @@ impl View for TerminalView {
                         column.add_child(ChildView::new(&self.use_agent_footer).finish());
                     }
 
+                    #[cfg(all(unix, feature = "local_tty"))]
+                    if let Some(status) = &self.persistent_status {
+                        column.add_child(ChildView::new(status).finish());
+                    }
                     let input_box_visible = self.is_input_box_visible(&model, app);
                     if input_box_visible {
                         column.add_child(self.render_input());

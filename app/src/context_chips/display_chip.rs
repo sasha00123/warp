@@ -335,6 +335,8 @@ impl UdiChipConfig {
 
 #[derive(Debug, Clone)]
 pub enum DisplayChipAction {
+    #[cfg(all(unix, feature = "local_tty"))]
+    OpenPersistentWorkspaces,
     CloseMenu,
     ToggleMenu,
     ToggleCodeReview,
@@ -343,6 +345,10 @@ pub enum DisplayChipAction {
 }
 
 pub struct DisplayChip {
+    #[cfg(all(unix, feature = "local_tty"))]
+    persistent_picker: Option<ViewHandle<super::persistent_workspace_popup::PersistentWorkspacePopup>>,
+    #[cfg(all(unix, feature = "local_tty"))]
+    persistent_picker_open: bool,
     mouse_state: MouseStateHandle,
     diff_stats_mouse_state: MouseStateHandle,
     text: String,
@@ -892,6 +898,18 @@ impl DisplayChip {
             ctx.notify();
         });
 
+        #[cfg(all(unix, feature = "local_tty"))]
+        let persistent_picker = if matches!(&chip_result.kind, ContextChipKind::Ssh) {
+            let popup = ctx.add_typed_action_view(|_| {
+                super::persistent_workspace_popup::PersistentWorkspacePopup::new(config.terminal_view_id)
+            });
+            ctx.subscribe_to_view(&popup, |me, _, _, ctx| {
+                me.persistent_picker_open = false;
+                ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: false });
+                ctx.notify();
+            });
+            Some(popup)
+        } else { None };
         let display_chip_kind = match chip_result.kind {
             ContextChipKind::AgentPlanAndTodoList => {
                 let context_model = config.ai_context_model.clone();
@@ -1175,6 +1193,10 @@ impl DisplayChip {
             ambient_agent_view_model: config.ambient_agent_view_model,
             code_review_keybinding,
             terminal_view_id: config.terminal_view_id,
+            #[cfg(all(unix, feature = "local_tty"))]
+            persistent_picker,
+            #[cfg(all(unix, feature = "local_tty"))]
+            persistent_picker_open: false,
         }
     }
 
@@ -1907,7 +1929,58 @@ impl DisplayChip {
         if self.is_in_agent_view {
             config = config.for_agent_view();
         }
-        render_udi_chip(config, appearance)
+        let ssh = render_udi_chip(config, appearance);
+        #[cfg(all(unix, feature = "local_tty"))]
+        if let Some(popup) = &self.persistent_picker {
+            let button = Hoverable::new(self.mouse_state.clone(), move |state| {
+                render_udi_chip(UdiChipConfig::new_with_icon(Icon::Terminal, color, "tmux".into())
+                    .with_hovered(state.is_hovered()), appearance)
+            }).on_click(|ctx, _, _| ctx.dispatch_typed_action(DisplayChipAction::OpenPersistentWorkspaces))
+                .with_cursor(Cursor::PointingHand).finish();
+            let mut stack = Stack::new().with_child(Flex::row().with_child(ssh)
+                .with_child(Container::new(button).with_margin_left(6.).finish()).finish());
+            if self.persistent_picker_open {
+                let positioning = self.menu_positioning_provider.menu_position(app);
+                let (parent, child) = Self::positioning_to_anchors(positioning);
+                let offset = match positioning {
+                    MenuPositioning::BelowInputBox => vec2f(0., 4.),
+                    MenuPositioning::AboveInputBox => vec2f(0., -4.),
+                };
+                stack.add_positioned_overlay_child(ChildView::new(popup).finish(),
+                    OffsetPositioning::offset_from_parent(offset, ParentOffsetBounds::WindowByPosition, parent, child));
+            }
+            return stack.finish();
+        }
+        ssh
+    }
+
+    #[cfg(all(unix, feature = "local_tty"))]
+    fn open_persistent_workspaces(&mut self, ctx: &mut ViewContext<Self>) {
+        use super::persistent_workspace_popup::{PickerConnection, WorkspaceKey};
+        use crate::terminal::persistent_tty::connection::ConnectionSlot;
+        let Some(popup) = self.persistent_picker.clone() else { return; };
+        let existing = ctx.view_with_id::<crate::terminal::TerminalView>(ctx.window_id(), self.terminal_view_id)
+            .and_then(|view| view.as_ref(ctx).persistent_workspace.clone());
+        let connection = existing.map(|attachment| PickerConnection {
+            connection: attachment.connection, control_path: attachment.control_path,
+            shell: attachment.shell_type, current_workspace: Some(WorkspaceKey {
+                id: attachment.workspace_id, generation: attachment.generation }),
+            recipe: Some(attachment.owner.as_ref(ctx).recipe().clone()), owner: Some(attachment.owner),
+        }).or_else(|| {
+            let session = &self.session_context.as_ref()?.session;
+            let control_path = session.ssh_control_path()?.to_path_buf();
+            let client = crate::remote_server::manager::RemoteServerManager::as_ref(ctx)
+                .client_for_session(session.id())?.clone();
+            let connection = ConnectionSlot::default();
+            connection.replace(Some(client));
+            Some(PickerConnection { connection, control_path, shell: session.shell().shell_type(),
+                current_workspace: None, owner: None,
+                recipe: crate::terminal::persistent_tty::ssh_recipe::SshRecipe::load_local(session.id()).ok() })
+        });
+        self.persistent_picker_open = true;
+        popup.update(ctx, |popup, ctx| popup.open(connection, ctx));
+        ctx.emit(PromptDisplayChipEvent::ToggleMenu { open: true });
+        ctx.notify();
     }
 
     fn subshell_chip(&self, app: &AppContext) -> Box<dyn Element> {
@@ -2135,6 +2208,8 @@ impl TypedActionView for DisplayChip {
 
     fn handle_action(&mut self, action: &DisplayChipAction, ctx: &mut ViewContext<Self>) {
         match action {
+            #[cfg(all(unix, feature = "local_tty"))]
+            DisplayChipAction::OpenPersistentWorkspaces => self.open_persistent_workspaces(ctx),
             DisplayChipAction::CloseMenu => match &mut self.display_chip_kind {
                 DisplayChipKind::GitBranch { menu_open, menu }
                 | DisplayChipKind::GitBranchStatus {

@@ -4,6 +4,15 @@ pub mod codebase_index_proto;
 pub mod host_id;
 pub mod host_response;
 pub mod manager;
+#[cfg(unix)]
+pub mod persistent_journal;
+#[cfg(unix)]
+pub mod persistent_shell;
+pub mod persistent_replay;
+#[cfg(unix)]
+pub mod persistent_workspace;
+#[cfg(unix)]
+pub mod persistent_workspace_rpc;
 pub mod protocol;
 pub mod repo_metadata_proto;
 pub mod setup;

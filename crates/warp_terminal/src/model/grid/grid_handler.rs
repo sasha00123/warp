@@ -2480,17 +2480,17 @@ impl GridHandler {
         // TODO(CORE-1847): explore if we can remove this logic and simply rely on the cursor (need to fix
         // the cursor position for typeahead block first).
         let bottommost_nonempty_other = other.bottommost_nonempty_row();
-        let rightmost_nonempty_other = other.rightmost_nonempty_cell(None);
         let max_row = min(max_point.row, bottommost_nonempty_other.unwrap_or(0));
-        let max_col = min(
-            other.columns().saturating_sub(1),
-            rightmost_nonempty_other.unwrap_or(0),
-        );
 
         // Iterate through the "other" Grid and copy over cells one-by-one.
         for row_idx in 0..=max_row {
             let row = other.row(row_idx).expect("row should exist");
-            for col in 0..=max_col {
+            let cells_to_copy = if other.row_wraps(row_idx) {
+                other.columns()
+            } else {
+                row[..].iter().rposition(|cell| !cell.is_empty()).map_or(0, |col| col + 1)
+            };
+            for col in 0..cells_to_copy {
                 // Move cursor to next line, if needed (in combined grid).
                 if self.grid.cursor().input_needs_wrap {
                     self.wrapline();
@@ -2521,6 +2521,8 @@ impl GridHandler {
             // If we don't have a soft-wrap (from the "other" grid), then we need to hard-wrap the line
             // (in combined grid), to match the intended text layout.
             if !other.row_wraps(row_idx) && row_idx < max_row {
+                // Copying grid rows must not depend on the destination's LNM mode.
+                self.carriage_return();
                 self.newline();
             }
         }

@@ -8,6 +8,14 @@ use warp_core::channel::{Channel, ChannelConfig, ChannelState, OzConfig, WarpSer
 
 // Simple wrapper around warp::run() for Warp OSS builds.
 fn main() -> Result<()> {
+    #[cfg(unix)]
+    if let Some(result) = remote_server::persistent_shell::run_shell_if_requested() {
+        return result.map_err(Into::into);
+    }
+    #[cfg(unix)]
+    if let Some(result) = remote_server::persistent_journal::run_recorder_if_requested() {
+        return result.map_err(Into::into);
+    }
     let mut state = ChannelState::new(
         Channel::Oss,
         ChannelConfig {

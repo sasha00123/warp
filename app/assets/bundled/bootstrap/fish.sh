@@ -45,7 +45,19 @@ if test -n "$WARP_PATH_APPEND"
     set -e WARP_PATH_APPEND
 end
 
+function warp_persistent_activity
+    if test "$WARP_PERSISTENT_WORKSPACE" = 1; and test -n "$WARP_PERSISTENT_ROOT_SESSION"; and test "$WARP_SESSION_ID" = "$WARP_PERSISTENT_ROOT_SESSION"; and test -f "$WARP_PERSISTENT_ACTIVITY_PATH"
+        printf '%s\n' "$argv[1]" 2>/dev/null > "$WARP_PERSISTENT_ACTIVITY_PATH"
+    end
+    return 0
+end
+
 function warp_send_json_message
+    if string match -q -- '{"hook": "Preexec",*' "$argv[1]"
+        warp_persistent_activity running
+    else if string match -q -- '{"hook": "Precmd",*' "$argv[1]"; or string match -q -- '{"hook": "CommandFinished",*' "$argv[1]"
+        warp_persistent_activity idle
+    end
     # Sends a message to the controlling terminal as a DSC control sequence.
     set -l escaped_json (warp_hex_encode_string "$argv")
     if [ "$WARP_USING_WINDOWS_CON_PTY" = true ]
@@ -815,6 +827,22 @@ if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
             # If we cannot generate a non-zero random token, run plain SSH instead.
             command ssh $argv
             return
+        end
+
+        # If the user's SSH config sets a RemoteCommand for this destination,
+        # Capture reconnect arguments locally, never in a remote hook.
+        if test "$WARP_IS_LOCAL_SHELL_SESSION" = "1"
+            set -l _ew_recipe_dir "$HOME/.local/state/eternalwarp/ssh-recipes"
+            begin
+                set -l _ew_old_umask (umask)
+                umask 077
+                command mkdir -p "$_ew_recipe_dir"
+                and begin
+                    printf 'EWSSH1\0%s\0' "$PWD"
+                    printf '%s\0' $argv
+                end > "$_ew_recipe_dir/$remote_session_id.argv"
+                umask $_ew_old_umask
+            end 2>/dev/null
         end
 
         # If the user's SSH config sets a RemoteCommand for this destination,

@@ -873,6 +873,10 @@ fn attach_terminal_view(
     terminal_pane_id: TerminalPaneId,
     ctx: &mut ViewContext<PaneGroup>,
 ) {
+    #[cfg(all(unix, feature = "local_tty"))]
+    if let Some(transport) = &terminal_view.as_ref(ctx).persistent_transport {
+        transport.resume();
+    }
     ctx.subscribe_to_view(
         terminal_view,
         move |group: &mut PaneGroup, _, event, ctx| {
@@ -914,6 +918,14 @@ fn handle_terminal_view_event(
 
     if group.pane_contents.contains_key(&pane_id) {
         match event {
+            #[cfg(all(unix, feature = "local_tty"))]
+            Event::OpenPersistentWorkspace(attachment) => {
+                group.open_persistent_workspace(pane_id, attachment.clone(), ctx);
+            }
+            #[cfg(all(unix, feature = "local_tty"))]
+            Event::OpenPersistentRecovery(attachment) => {
+                group.open_persistent_recovery(pane_id, attachment, ctx);
+            }
             Event::Escape => ctx.emit(pane_group::Event::Escape),
             Event::ExecuteCommand(event) => {
                 ctx.emit(pane_group::Event::ExecuteCommand(event.clone()));
