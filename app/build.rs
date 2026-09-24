@@ -162,12 +162,12 @@ fn generate_channel_config_if_needed(target_family: &str, target_os: &str) {
 
     // Check if the config binary is available on PATH. If not, we can't generate embedded
     // configs. This is expected for external contributors building Warp OSS.
-    if Command::new(config_bin)
+    if !Command::new(config_bin)
         .arg("--help")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .is_err()
+        .is_ok_and(|status| status.success())
     {
         return;
     }
