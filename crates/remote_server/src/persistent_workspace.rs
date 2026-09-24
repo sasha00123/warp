@@ -7,6 +7,7 @@ use std::fmt;
 use std::fs::File;
 use std::io::Read;
 use std::os::fd::OwnedFd;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -337,14 +338,34 @@ impl Backend {
     }
 
     fn run(&self, args: &[&str]) -> Result<String, Error> {
+        // Resolve PATH before spawning: userspace executable translators can
+        // turn ENOENT into a failed child with no diagnostic instead.
+        let executable = if self.executable.components().count() == 1 {
+            let path = std::env::var_os("PATH").unwrap_or_else(|| "/usr/bin:/bin".into());
+            std::env::split_paths(&path)
+                .map(|directory| directory.join(&self.executable))
+                .find(|candidate| {
+                    candidate.metadata().is_ok_and(|metadata| {
+                        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+                    })
+                })
+                .ok_or_else(|| {
+                    Error::new(
+                        ErrorKind::Unavailable,
+                        "Install tmux 3.2 or newer and ensure it is executable in the remote SSH PATH",
+                    )
+                })?
+        } else {
+            self.executable.clone()
+        };
         // Userspace executable translators may report a missing absolute path
         // as an exited child rather than a spawn error. Keep that actionable.
-        if self.executable.is_absolute() && matches!(self.executable.try_exists(), Ok(false)) {
+        if executable.is_absolute() && matches!(executable.try_exists(), Ok(false)) {
             return Err(Error::new(
                 ErrorKind::Unavailable,
                 format!(
                     "Could not start tmux: {} does not exist",
-                    self.executable.display()
+                    executable.display()
                 ),
             ));
         }
@@ -356,7 +377,7 @@ impl Backend {
         let (mut stderr, child_stderr) = UnixStream::pair().map_err(io_error)?;
         stdout.set_nonblocking(true).map_err(io_error)?;
         stderr.set_nonblocking(true).map_err(io_error)?;
-        let mut child = Command::new(&self.executable)
+        let mut child = Command::new(&executable)
             .args(["-L", &self.socket, "-f", "/dev/null"])
             .args(args)
             .env_remove("TMUX")
@@ -431,7 +452,14 @@ impl Backend {
             } else {
                 ErrorKind::Failed
             };
-            return Err(Error::new(kind, stderr.trim().to_owned()));
+            let message = if stderr.trim().is_empty() {
+                format!(
+                    "tmux failed ({status}) without a diagnostic. Check that tmux 3.2 or newer is installed and executable on the remote host"
+                )
+            } else {
+                stderr.trim().to_owned()
+            };
+            return Err(Error::new(kind, message));
         }
         Ok(stdout)
     }

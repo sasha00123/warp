@@ -92,6 +92,26 @@ fn missing_tmux_is_not_an_empty_workspace_list() {
 }
 
 #[test]
+fn missing_tmux_in_path_is_actionable() {
+    let mut backend = Backend::new("ew-test-unavailable").unwrap();
+    backend.executable = format!("ew-missing-tmux-{}", random_token().unwrap()).into();
+    let error = backend.list().unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Unavailable, "{error:?}");
+    assert!(error.message.contains("tmux 3.2"));
+    assert!(error.message.contains("remote SSH PATH"));
+}
+
+#[test]
+fn silent_tmux_failure_has_an_actionable_diagnostic() {
+    let (backend, directory) = fake_command("exit 1");
+    let error = backend.list().unwrap_err();
+    std::fs::remove_dir_all(directory).unwrap();
+    assert_eq!(error.kind, ErrorKind::Failed, "{error:?}");
+    assert!(error.message.contains("without a diagnostic"));
+    assert!(error.message.contains("installed and executable"));
+}
+
+#[test]
 fn validates_tmux_numeric_identifiers() {
     assert!(numeric_id("$123", '$'));
     for value in ["", "$", "$1;kill-server", "@2", "$-1"] {
