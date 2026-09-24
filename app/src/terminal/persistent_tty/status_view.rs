@@ -50,7 +50,9 @@ fn status_text(
     running: bool,
 ) -> StatusText {
     let label = match &transport.phase {
-        TransportPhase::Live if transport.input_delivery_unknown || transport.discarded_input => "Input paused",
+        TransportPhase::Live if transport.input_delivery_unknown || transport.discarded_input => {
+            "Input paused"
+        }
         TransportPhase::Live if running => "Running",
         TransportPhase::Live => "Idle",
         TransportPhase::Replaying => "Restoring",
@@ -63,7 +65,8 @@ fn status_text(
             ConnectionStatus::Connected => "Attaching",
             ConnectionStatus::Reconnecting { .. } => "Reconnecting",
         },
-    }.to_owned();
+    }
+    .to_owned();
     let message = match &transport.phase {
         TransportPhase::Live => if running {
             "Running | persistent SSH"
@@ -115,7 +118,9 @@ fn status_text(
         message,
         show_details: !matches!(transport.phase, TransportPhase::Live)
             || acknowledge
-            || transport.history_storage_bytes.is_some_and(|bytes| bytes >= 1024 * 1024 * 1024),
+            || transport
+                .history_storage_bytes
+                .is_some_and(|bytes| bytes >= 1024 * 1024 * 1024),
         acknowledge,
         retry: matches!(transport.phase, TransportPhase::Failed(_)),
         recover: matches!(
@@ -280,7 +285,8 @@ impl View for StatusView {
                     Icon::Terminal,
                     theme.ansi_fg_blue(),
                     format!("tmux {} | {}", self.workspace_label, self.status.label),
-                ).with_hovered(state.is_hovered()),
+                )
+                .with_hovered(state.is_hovered()),
                 appearance,
             )
         })

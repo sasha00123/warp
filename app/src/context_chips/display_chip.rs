@@ -1944,12 +1944,18 @@ impl DisplayChip {
         ) {
             let terminal = view.as_ref(app);
             if let Some(status) = &terminal.persistent_status {
-                if self.is_in_agent_view || !terminal.persistent_chip_in_prompt(&terminal.model.lock(), app) {
+                if self.is_in_agent_view
+                    || !terminal.persistent_chip_in_prompt(&terminal.model.lock(), app)
+                {
                     return ssh;
                 }
                 return Flex::row()
                     .with_child(ssh)
-                    .with_child(Container::new(ChildView::new(status).finish()).with_margin_left(6.).finish())
+                    .with_child(
+                        Container::new(ChildView::new(status).finish())
+                            .with_margin_left(6.)
+                            .finish(),
+                    )
                     .finish();
             }
         }

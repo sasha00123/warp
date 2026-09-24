@@ -8862,7 +8862,11 @@ impl TerminalView {
     /// actually part of this input layout. PS1, bootstrap, agent and fullscreen
     /// layouts retain the same control in the terminal footer instead.
     #[cfg(all(unix, feature = "local_tty"))]
-    pub(crate) fn persistent_chip_in_prompt(&self, model: &TerminalModel, app: &AppContext) -> bool {
+    pub(crate) fn persistent_chip_in_prompt(
+        &self,
+        model: &TerminalModel,
+        app: &AppContext,
+    ) -> bool {
         self.is_input_box_visible(model, app)
             && model.block_list().is_bootstrapped()
             && !crate::terminal::prompt_render_helper::should_render_ps1_prompt(model, app)
@@ -8870,9 +8874,12 @@ impl TerminalView {
                 || !crate::settings::InputSettings::as_ref(app).is_classic_input_enabled(app))
             && !self.agent_view_controller.as_ref(app).is_active()
             && !self.has_active_cli_agent_input_session(app)
-            && self.current_prompt().as_ref(app).chips(app).iter().any(|chip| {
-                matches!(chip.kind(), ContextChipKind::Ssh) && chip.value.is_some()
-            })
+            && self
+                .current_prompt()
+                .as_ref(app)
+                .chips(app)
+                .iter()
+                .any(|chip| matches!(chip.kind(), ContextChipKind::Ssh) && chip.value.is_some())
     }
 
     pub fn is_input_box_visible(&self, model: &TerminalModel, app: &AppContext) -> bool {
