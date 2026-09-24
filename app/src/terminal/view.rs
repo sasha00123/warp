@@ -8858,6 +8858,23 @@ impl TerminalView {
         &self.pane_configuration
     }
 
+    /// Only use the inline workspace control when the interactive SSH chip is
+    /// actually part of this input layout. PS1, bootstrap, agent and fullscreen
+    /// layouts retain the same control in the terminal footer instead.
+    #[cfg(all(unix, feature = "local_tty"))]
+    pub(crate) fn persistent_chip_in_prompt(&self, model: &TerminalModel, app: &AppContext) -> bool {
+        self.is_input_box_visible(model, app)
+            && model.block_list().is_bootstrapped()
+            && !crate::terminal::prompt_render_helper::should_render_ps1_prompt(model, app)
+            && (FeatureFlag::AgentView.is_enabled()
+                || !crate::settings::InputSettings::as_ref(app).is_classic_input_enabled(app))
+            && !self.agent_view_controller.as_ref(app).is_active()
+            && !self.has_active_cli_agent_input_session(app)
+            && self.current_prompt().as_ref(app).chips(app).iter().any(|chip| {
+                matches!(chip.kind(), ContextChipKind::Ssh) && chip.value.is_some()
+            })
+    }
+
     pub fn is_input_box_visible(&self, model: &TerminalModel, app: &AppContext) -> bool {
         if model.is_read_only() {
             return false;
@@ -28843,8 +28860,15 @@ impl View for TerminalView {
                     }
 
                     #[cfg(all(unix, feature = "local_tty"))]
-                    if let Some(status) = &self.persistent_status {
-                        column.add_child(ChildView::new(status).finish());
+                    if let Some(status) = &self.persistent_status
+                        && !self.persistent_chip_in_prompt(&model, app)
+                    {
+                        column.add_child(
+                            Container::new(ChildView::new(status).finish())
+                                .with_horizontal_padding(12.)
+                                .with_vertical_padding(6.)
+                                .finish(),
+                        );
                     }
                     let input_box_visible = self.is_input_box_visible(&model, app);
                     if input_box_visible {

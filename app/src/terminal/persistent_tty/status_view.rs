@@ -1,4 +1,4 @@
-//! Small, always-visible connection/job status with explicit input recovery.
+//! One workspace chip, hosted by the prompt or its hidden-input fallback.
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,11 +17,13 @@ use warpui::{
 use super::connection_owner::{ConnectionOwner, ConnectionStatus};
 use super::transport::{TransportHandle, TransportPhase, TransportStatus};
 use crate::appearance::Appearance;
+use crate::context_chips::display_chip::{UdiChipConfig, render_udi_chip};
 use crate::context_chips::persistent_workspace_popup::{
     PersistentWorkspacePopup, PickerConnection, WorkspaceKey,
 };
 use crate::terminal::TerminalModel;
 use crate::ui_components::blended_colors;
+use crate::ui_components::icons::Icon;
 use warpui::SingletonEntity;
 
 #[derive(Clone, Debug)]
@@ -34,7 +36,9 @@ pub enum Action {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct StatusText {
+    label: String,
     message: String,
+    show_details: bool,
     acknowledge: bool,
     retry: bool,
     recover: bool,
@@ -45,6 +49,21 @@ fn status_text(
     connection: &ConnectionStatus,
     running: bool,
 ) -> StatusText {
+    let label = match &transport.phase {
+        TransportPhase::Live if transport.input_delivery_unknown || transport.discarded_input => "Input paused",
+        TransportPhase::Live if running => "Running",
+        TransportPhase::Live => "Idle",
+        TransportPhase::Replaying => "Restoring",
+        TransportPhase::Exited => "Exited",
+        TransportPhase::Removed => "Removed",
+        TransportPhase::HistoryGap { .. } => "History expired",
+        TransportPhase::Failed(_) => "Paused",
+        TransportPhase::Disconnected => match connection {
+            ConnectionStatus::Connecting => "Connecting",
+            ConnectionStatus::Connected => "Attaching",
+            ConnectionStatus::Reconnecting { .. } => "Reconnecting",
+        },
+    }.to_owned();
     let message = match &transport.phase {
         TransportPhase::Live => if running {
             "Running | persistent SSH"
@@ -92,7 +111,11 @@ fn status_text(
         message
     };
     StatusText {
+        label,
         message,
+        show_details: !matches!(transport.phase, TransportPhase::Live)
+            || acknowledge
+            || transport.history_storage_bytes.is_some_and(|bytes| bytes >= 1024 * 1024 * 1024),
         acknowledge,
         retry: matches!(transport.phase, TransportPhase::Failed(_)),
         recover: matches!(
@@ -103,6 +126,7 @@ fn status_text(
 }
 
 pub struct StatusView {
+    workspace_label: String,
     transport: TransportHandle,
     owner: ModelHandle<ConnectionOwner>,
     model: Arc<FairMutex<TerminalModel>>,
@@ -121,6 +145,7 @@ impl StatusView {
         transport: TransportHandle,
         owner: ModelHandle<ConnectionOwner>,
         model: Arc<FairMutex<TerminalModel>>,
+        workspace_id: &str,
         terminal_view_id: EntityId,
         ctx: &mut ViewContext<Self>,
     ) -> Self {
@@ -139,6 +164,7 @@ impl StatusView {
             ctx.notify();
         });
         let mut view = Self {
+            workspace_label: workspace_id.chars().take(8).collect(),
             transport,
             owner,
             model,
@@ -248,29 +274,28 @@ impl View for StatusView {
         let foreground = blended_colors::text_main(theme, background);
         let font = appearance.ui_font_family();
         let size = appearance.ui_font_size();
-        let switcher = Hoverable::new(self.picker_mouse.clone(), move |_| {
-            Container::new(
-                Text::new("Workspaces", font, size)
-                    .with_color(theme.ansi_fg_blue())
-                    .finish(),
+        let switcher = Hoverable::new(self.picker_mouse.clone(), move |state| {
+            render_udi_chip(
+                UdiChipConfig::new_with_icon(
+                    Icon::Terminal,
+                    theme.ansi_fg_blue(),
+                    format!("tmux {} | {}", self.workspace_label, self.status.label),
+                ).with_hovered(state.is_hovered()),
+                appearance,
             )
-            .with_horizontal_padding(12.)
-            .finish()
         })
         .on_click(|ctx, _, _| ctx.dispatch_typed_action(Action::OpenWorkspaces))
         .with_cursor(Cursor::PointingHand)
         .finish();
-        let mut column = Flex::column().with_child(
-            Flex::row()
-                .with_child(
-                    Text::new(self.status.message.clone(), font, size)
-                        .with_color(foreground)
-                        .soft_wrap(true)
-                        .finish(),
-                )
-                .with_child(switcher)
-                .finish(),
-        );
+        let mut column = Flex::column().with_child(switcher);
+        if self.status.show_details {
+            column.add_child(
+                Text::new(self.status.message.clone(), font, size)
+                    .with_color(foreground)
+                    .soft_wrap(true)
+                    .finish(),
+            );
+        }
         if self.status.acknowledge {
             column.add_child(
                 Hoverable::new(self.acknowledge_mouse.clone(), move |_| {
@@ -321,13 +346,7 @@ impl View for StatusView {
                 .finish(),
             );
         }
-        let mut stack = Stack::new().with_child(
-            Container::new(column.finish())
-                .with_background(background)
-                .with_horizontal_padding(12.)
-                .with_vertical_padding(6.)
-                .finish(),
-        );
+        let mut stack = Stack::new().with_child(column.finish());
         if self.picker_open {
             stack.add_positioned_overlay_child(
                 ChildView::new(&self.picker).finish(),
@@ -346,6 +365,33 @@ impl View for StatusView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn healthy_workspace_has_only_a_compact_chip() {
+        let (handle, _) = TransportHandle::channel();
+        let mut status = handle.status();
+        status.phase = TransportPhase::Live;
+        for (running, label) in [(false, "Idle"), (true, "Running")] {
+            let text = status_text(&status, &ConnectionStatus::Connected, running);
+            assert_eq!(text.label, label);
+            assert!(!text.show_details);
+        }
+    }
+
+    #[test]
+    fn compact_chip_does_not_hide_input_or_storage_warnings() {
+        let (handle, _) = TransportHandle::channel();
+        let mut status = handle.status();
+        status.phase = TransportPhase::Live;
+        status.discarded_input = true;
+        let text = status_text(&status, &ConnectionStatus::Connected, false);
+        assert_eq!(text.label, "Input paused");
+        assert!(text.show_details && text.acknowledge);
+        status.discarded_input = false;
+        status.history_storage_bytes = Some(1024 * 1024 * 1024);
+        let text = status_text(&status, &ConnectionStatus::Connected, false);
+        assert!(text.show_details);
+        assert!(text.message.contains("GiB"));
+    }
     #[test]
     fn persistent_status_never_reports_a_disconnected_job_as_idle() {
         let (handle, _) = TransportHandle::channel();

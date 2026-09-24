@@ -1935,6 +1935,24 @@ impl DisplayChip {
             config = config.for_agent_view();
         }
         let ssh = render_udi_chip(config, appearance);
+        // Reuse the exact same view (including popup and recovery actions) that
+        // the terminal hosts while its input is hidden. Never render both.
+        #[cfg(all(unix, feature = "local_tty"))]
+        if let Some(view) = app.view_with_id::<crate::terminal::TerminalView>(
+            self.quota_reset_popup.window_id(app),
+            self.terminal_view_id,
+        ) {
+            let terminal = view.as_ref(app);
+            if let Some(status) = &terminal.persistent_status {
+                if self.is_in_agent_view || !terminal.persistent_chip_in_prompt(&terminal.model.lock(), app) {
+                    return ssh;
+                }
+                return Flex::row()
+                    .with_child(ssh)
+                    .with_child(Container::new(ChildView::new(status).finish()).with_margin_left(6.).finish())
+                    .finish();
+            }
+        }
         #[cfg(all(unix, feature = "local_tty"))]
         if let Some(popup) = &self.persistent_picker {
             let button = Hoverable::new(self.mouse_state.clone(), move |state| {

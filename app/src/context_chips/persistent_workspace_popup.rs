@@ -510,8 +510,9 @@ impl View for PersistentWorkspacePopup {
                 == Some(&key);
             let prefix = if current { "Current: " } else { "" };
             let status = workspace_status(workspace);
+            let short_id: String = key.id.chars().take(8).collect();
             let title = format!(
-                "{prefix}{} {} | {status}\n{}",
+                "{prefix}{} {} | {status} | {short_id}\n{}",
                 workspace.shell.as_deref().unwrap_or("legacy"),
                 workspace.window_id,
                 history_label(workspace.history_storage_bytes)

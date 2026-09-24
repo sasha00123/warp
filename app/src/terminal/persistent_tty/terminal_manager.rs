@@ -150,6 +150,7 @@ impl TerminalManager {
                 handle.clone(),
                 attachment.owner.clone(),
                 model.clone(),
+                &attachment.workspace_id,
                 view.id(),
                 ctx,
             )

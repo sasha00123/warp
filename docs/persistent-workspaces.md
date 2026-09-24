@@ -1,6 +1,6 @@
 # Persistent SSH workspaces
 
-This describes the current unreleased candidate. Publication requires the isolated-VM
+Publication requires the isolated-VM
 acceptance matrix in `tools/persistent-ssh-lab/README.md`; source implementation alone
 does not establish a tested release.
 
@@ -10,6 +10,14 @@ Connect through Warp's SSH extension and open the native **Workspaces** picker a
 warpification. **New workspace** creates an independent remote shell. Selecting an
 existing workspace reattaches to that exact incarnation; it never reruns the command.
 Commands, output, the editor, input, and interrupts use the selected workspace.
+
+The workspace control uses the same chip in both layouts: `tmux <short ID> | Idle`
+or `Running`. It normally lives beside the remote host in the prompt. When that
+prompt is unavailable (a running command, fullscreen application, PS1, or an agent
+layout), the same control appears in a compact footer instead, never in both places.
+The short ID also appears in the picker so the selected workspace is unambiguous.
+Reconnect, replay, input-delivery and disk-usage warnings remain visible, with the
+same recovery actions in either location.
 
 Closing a tab or quitting Warp detaches locally. The remote shell and its jobs remain
 in tmux. Reopening restores the saved workspace and replays recorded output. Network
