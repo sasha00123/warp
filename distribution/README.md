@@ -8,7 +8,9 @@ The current integration targets Apple Silicon macOS and Linux SSH hosts on both
 ARM64 and x86-64. Linux artifacts are built on Ubuntu 24.04; older distributions
 must provide compatible runtime libraries or build the extension from source.
 tmux 3.2 or newer is supported, with capability fallbacks for older tmux releases.
-The local test matrix includes tmux 3.4 and 3.7c. See
+The local test matrix includes tmux 3.2a, 3.4 and 3.7c. Linux extensions use
+upstream's headless CLI feature set, without desktop audio or input-classifier
+models. See
 `docs/persistent-workspaces.md` for retention, reconnect, recovery and deletion
 semantics. No additional remote listening port is used.
 
@@ -50,11 +52,11 @@ Keep `main` and `personal/main` protected from force pushes/deletion, including 
 
 ## Build and release
 
-Personal CI builds PR merge commits and every push to `personal/main`, using ordinary hosted macOS Apple Silicon and Intel runners. PR jobs have read-only tokens and no signing or sync secrets. Artifacts expire after 14 days.
+Personal CI builds PR merge commits and every push to `personal/main`, using an ordinary hosted macOS Apple Silicon runner. The current release matrix adds Linux ARM64 and x86-64 extensions; it does not include an Intel macOS app. PR jobs have read-only tokens and no signing or sync secrets. Artifacts expire after 14 days.
 
 Run `Personal CI` with ref `personal/main` and `source_ref=refs/pull/NUMBER/merge` to validate a bot-created upstream PR. Its artifact is a test build only. The result is posted as `personal/ci` on the PR head after verifying the head and base still match the tested merge. The same required check applies to bot-created PRs. For outside-fork PRs, a maintainer must run this manual validation after review because their read-only token cannot post commit statuses. Resolve conflicts on a separate integration branch before testing.
 
-Run `Personal Release` on `personal/main` with a numeric `version` such as `2026.9.19`. A version is immutable: reruns refuse existing tags/releases. Both architectures must build successfully before a draft GitHub Release is created. It contains ZIP apps, source archive at the exact built commit, Cargo.lock, source/rebuild instructions, license notices, checksums and a Homebrew manifest. Review the draft and launch the app before publishing it. Never publish a draft whose build or source bundle is incomplete.
+Run `Personal Release` on `personal/main` with a numeric `version` such as `2026.9.19`. A version is immutable: reruns refuse existing tags/releases. The Apple Silicon app and both Linux extensions must build successfully before a draft GitHub Release is created. It contains the ZIP app, extension tarballs, source archive at the exact built commit, Cargo.lock, source/rebuild instructions, license notices, checksums and a Homebrew manifest. Complete the isolated-VM acceptance matrix before publishing it. Never publish a draft whose build, tests or source bundle is incomplete.
 
 The release source archive includes the exact Git tree and recursively initialized submodules. `dependency-sources/` contains registry crate sources and complete tracked Git dependency workspaces at their locked revisions; its `manifest.json` maps packages to source snapshots. Identical crate names/versions from different origins are kept separately, because Cargo's single-directory vendor export cannot represent this dependency graph. The original Cargo.lock is preserved without substitutions. These are corresponding source snapshots, not an offline Cargo source replacement: Cargo resolution, non-Cargo build downloads and toolchains may still require the network. The distribution scripts read Git metadata: to rebuild a packaged release, clone this fork, check out the exact commit in `homebrew.json`, initialize submodules and follow the build commands below. The source archive also supports direct Cargo builds with the original lockfile. Preserve all corresponding sources for as long as distributing binaries.
 
@@ -95,6 +97,13 @@ Primary application license: AGPL-3.0. Keep all original copyright/license files
 Sources: [Zed software overview](https://zed.dev/software-overview), [Zed brand](https://zed.dev/brand), [Warp FAQ](https://github.com/warpdotdev/warp/blob/master/FAQ.md), repository LICENSE files. The source licenses do not provide permission to imply upstream endorsement. The application names include “Custom”; releases, package descriptions and app metadata explicitly say “unofficial build”. The IDs, protocols and source-drawn Dock icons distinguish these builds from official apps; upstream names in attribution and feature documentation describe origin. This is not a trademark clearance or a promise of upstream cloud support.
 
 ## Existing SSH/tmux feature migration
+
+The following records the earlier distribution baseline, not the current candidate.
+The native persistent-workspace implementation has since been ported onto upstream
+`2120e3794710027577f731e4b8ce4814405f3c53` on the separate
+`feature/persistent-ssh-release` integration branch. No older feature PR or protected
+branch is rewritten by this integration. Publication is still gated by packaged-artifact
+VM acceptance, not this source migration alone.
 
 The original checkout remains untouched. Its committed feature (`ba46fa29`, plus prerequisite `cc08ede7`) is preserved as `feature/persistent-ssh-tmux`. The distribution starts at upstream `7ffccbb8`, the base used by that feature, because current upstream has removed/reorganized terminal components and a trial merge produced conflicts in more than 20 files. `main` still mirrors current `warpdotdev/warp/master`; do not force the integration through.
 

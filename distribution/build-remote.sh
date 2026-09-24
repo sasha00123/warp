@@ -6,7 +6,9 @@ version="$1"
 [[ "$(uname -s)" == Linux ]] || { printf 'Build remote artifacts in Linux\n' >&2; exit 1; }
 export WARP_CUSTOM_RELEASE_VERSION="$version"
 export GIT_RELEASE_TAG="personal-v$version"
-cargo build --locked --profile release-lto --bin warp-oss --features release_bundle,gui,nld_classifier_v3,nld_heuristic_v2
+# Match upstream's headless CLI artifact: do not require desktop audio libraries
+# or ship the graphical client's input-classification models on SSH hosts.
+cargo build --locked --profile release-lto --bin warp-oss --features release_bundle,standalone
 case "$(uname -m)" in
   aarch64|arm64) arch=aarch64 ;;
   x86_64|amd64) arch=x86_64 ;;

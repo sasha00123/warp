@@ -55,8 +55,8 @@ can be reopened from the original workspace pane.
 
 - The matching custom Mac app and Linux SSH extension are installed as a pair.
   Management-only extensions are rejected for native block replay.
-- The implementation requires tmux 3.2 or newer; the test lanes exercise older tmux
-  3.4 on Linux and newer tmux 3.7c on macOS. Each release must record its actual results.
+- The implementation requires tmux 3.2 or newer; the test lanes exercise tmux
+  3.2a and 3.4 on Linux and newer tmux 3.7c on macOS. Each release must record its actual results.
 - Native shell integration supports Bash, Zsh, and Fish. Arbitrary old tmux panes are
   not bootstrapped while a command may be running.
 - SSH uses its existing connection and extension protocol. No extra production
