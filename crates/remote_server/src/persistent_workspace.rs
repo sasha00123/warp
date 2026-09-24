@@ -337,6 +337,17 @@ impl Backend {
     }
 
     fn run(&self, args: &[&str]) -> Result<String, Error> {
+        // Userspace executable translators may report a missing absolute path
+        // as an exited child rather than a spawn error. Keep that actionable.
+        if self.executable.is_absolute() && matches!(self.executable.try_exists(), Ok(false)) {
+            return Err(Error::new(
+                ErrorKind::Unavailable,
+                format!(
+                    "Could not start tmux: {} does not exist",
+                    self.executable.display()
+                ),
+            ));
+        }
         // Socket pairs provide nonblocking reads without detached reader threads.
         // A daemon may inherit stdout; waiting for EOF after the client exits
         // would otherwise bypass the command deadline indefinitely.

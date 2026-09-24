@@ -87,7 +87,8 @@ fn rejects_unsafe_socket_names() {
 fn missing_tmux_is_not_an_empty_workspace_list() {
     let mut backend = Backend::new("ew-test-unavailable").unwrap();
     backend.executable = "/does-not-exist/tmux".into();
-    assert_eq!(backend.list().unwrap_err().kind, ErrorKind::Unavailable);
+    let error = backend.list().unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Unavailable, "{error:?}");
 }
 
 #[test]
